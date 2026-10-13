@@ -1,30 +1,52 @@
-# Dirtline MX
+# Dirtline MX — 250F simulation prototype
 
-A Roblox arcade motocross starter: ride an orange dirt bike around a winding dirt circuit, jump the tabletops, clear numbered gates, and beat your lap time. The track and motorcycles are built from Roblox parts, with no paid assets or external game services.
+Phase 1 of a realistic Roblox motocross project: one fictional 250cc four-stroke and a dedicated handling laboratory. Physics quality comes before the motorcycle collection, career, shops, or additional production tracks.
 
-## Play in Roblox Studio
+The former arcade controller has been replaced with separate wheel-contact forces, suspension, manual drivetrain, rider mass movement and unrestricted body rotation. **This is a prototype awaiting Roblox Studio handling acceptance**, not a claim of MX Bikes-equivalent physics or a qualified competitive release.
 
-1. On this GitHub repository, choose **Code → Download ZIP** and extract the ZIP on your Windows PC or Mac.
-2. Install **Roblox Studio** from [Roblox Creator Hub](https://create.roblox.com/) if needed.
-3. In Studio, choose **File → Open from File** and open `DirtlineMX.rbxlx` from the extracted folder.
-4. Press **Play**.
+## Download and test
 
-You spawn on your own bike behind the start line. Cross START / FINISH to start a timed lap, pass every gate in order, then cross the finish to complete it. Riding backward through a gate does not count.
+1. On [Ceeb68/Roblox](https://github.com/Ceeb68/Roblox), choose **Code → Download ZIP** and extract it on a Windows PC or Mac.
+2. Install [Roblox Studio](https://create.roblox.com/) if needed.
+3. Choose **File → Open from File**, select the root **DirtlineMX.rbxlx**, and press **Play**.
+4. Start in neutral with feet down. Press **E** to select first while clutch is pulled, hold **W** to add throttle, and hold **B** to release the clutch progressively. **V** pulls the lever back; **Shift** is a quick pull override. Raise feet with **F** when moving. Use **H** for help.
+5. Work through the flat pad, braking bumps, ruts, berms, whoops, easy tabletop, grip patches, then the separate large-jump lane. These stations need recorded Studio passes before Phase 1 is complete.
 
-The root `DirtlineMX.rbxlx` is the downloadable starter build. Source changes are rebuilt into `build/DirtlineMX.rbxlx` by the development checks below; open that generated file when testing changes.
+Source edits build into `build/DirtlineMX.rbxlx`; the root file is the downloadable prototype snapshot. The original arcade build remains in Git commit `5fcc106`, and its circuit is preserved as `src/server/Track.luau`.
 
-| Control | Keyboard | Gamepad | Touch |
-| --- | --- | --- | --- |
-| Accelerate / reverse | W / S or up / down | Right trigger / X | Onscreen controls |
-| Steer | A / D or left / right | Left stick | Onscreen controls |
-| Brake | Space | Left trigger | Onscreen brake |
-| Return to start | R | Y | Reset button |
+## Manual controls
 
-Brake before tight bends. Resetting abandons the current lap but retains your best completed lap and lap count for this server session. Times are not saved after leaving the server.
+| Action | Keyboard | Controller |
+| --- | --- | --- |
+| Progressive throttle | W | Right trigger |
+| Front brake | Space | Left trigger |
+| Rear brake | S | Right bumper |
+| Meter clutch in / out | V / B; Shift quick pull | Left bumper pull; release over 0.6 s, re-pull/tap to meter |
+| Shift down / up | Q / E | D-pad down / up |
+| Handlebar steering | A / D | Left stick X |
+| Bike lean articulation | Z / X | D-pad left / right |
+| Rider forward / back | I / K | Right stick Y |
+| Rider side movement | J / L | Right stick X |
+| Standing / seated | C | A |
+| Feet down / up | F | X |
+| Engine starter | T | Left stick click |
+| Manual recovery | R, after crash cooldown | Y |
+| Help / suspension lab | H / U | Right stick click; setup via HUD |
 
-## Cloud development
+There is no reverse gear, automatic shift, upright/landing constraint, or traction control. Manual feet are physical supports, so leaving them down causes contact and drag. Lean, steering and rider body inputs are separate. Touch simulation controls are deferred; use PC or a controller.
 
-The cloud machine supports source editing, race-rule tests, place builds, and Rojo synchronization. Roblox Studio and the Roblox engine do not run in this Linux environment; bike handling and multiplayer behavior still need the Studio checks below.
+## Current capabilities and limitations
+
+- Independent front/rear grip and slip, combined cornering/braking limits, camber thrust and dirt/sand/mud/hardpack coefficients.
+- Front/rear spring, compression and rebound damping, preload and progressive bump stops; **U** opens independent setup edits while parked in the lab.
+- Manual neutral + five gears, clutch slip, engine braking, limiter, stall and explicit restart. Throttle/rear-brake rotor reactions contribute to airborne pitch.
+- Physical chassis rotation, finite rider articulation and standing/seated mass movement. No scripted whip or landing pose drives bike physics.
+- Crash observation, rider ejection and 2.5-second manual recovery. Development-lab laps use preserved authoritative gate/lap rules; setup edits, crashes and timing overruns invalidate unfinished runs.
+- Server-owned prototype simulation, sequence/range validated controls, live telemetry, and procedural motorcycle/rider visuals.
+
+The tire contacts are ray-based approximations, the rider is an articulated-mass approximation, and calibration is fictional starting data. Native Roblox suspension/body stability, cornering, jumps, crash behavior, rider poses, networking latency and multiplayer performance **remain unverified until Studio playtesting**. Production meshes, rider IK, licensed sounds, mobile riding, persistence, career, AI, garage and purchases are not implemented.
+
+## Development and verification
 
 ```bash
 cd /workspace/Roblox
@@ -32,24 +54,15 @@ bash scripts/setup-tools.sh
 bash scripts/check.sh
 ```
 
-The setup pins Rojo **7.7.1** and Luau **0.742**, installs them in `/workspace/.roblox-tools/bin`, and verifies official release archive SHA-256 digests. Run `bash scripts/check.sh` after changing the source. It tests lap/checkpoint rules, analyzes the pure rules module, compiles all Luau, builds the place, and checks that the actual game scripts are included. Generated files live in ignored `build/`.
+The setup pins verified official Rojo 7.7.1 and Luau 0.742 archives. The check runs all pure physics/race regressions, analyzes engine-independent modules/tests, compiles every Luau source, builds a place, and compares every embedded game script against the current source. The Linux cloud environment cannot run Roblox Studio or its physics engine.
 
-For live editing, run `bash scripts/dev.sh`, then connect the matching Rojo plugin in Studio to port **34872** through a supported connection to the development machine. Opening the built place directly works without the plugin. This cloud onboarding interface does not provide a browser game preview.
+For source synchronization use `bash scripts/dev.sh` and a supported Studio connection to the machine on port 34872. Opening the downloaded place does not require the Rojo plugin.
 
-## Studio playtest checklist
+## Project documents
 
-1. Play once; confirm the player is seated on an upright bike and W/A/S/D steer, accelerate, reverse, and brake.
-2. Cross the starting gate, complete the numbered circuit, and check that the lap counter and best time update. Skip a gate and verify the lap does not complete.
-3. Ride over all jumps and confirm landing stays controllable. Test R after dismounting or getting stuck.
-4. Use Studio's two-player server test. Each rider should control only their own bike and receive their own lap times. Check the server and client Output for errors.
-5. Use the device emulator and a gamepad to check HUD sizing and touch/gamepad controls.
+- [Assessment, architecture, roadmap and open work](docs/DEVELOPMENT.md)
+- [Physics equations, units, networking and limitations](docs/PHYSICS.md)
+- [Required Studio obstacle and handling acceptance](docs/STUDIO_VALIDATION.md)
+- [Production motorcycle, rider and audio asset pipeline](docs/ASSETS.md)
 
-## Source layout
-
-- `src/server/Bikes.luau`: bike construction, rider ownership and arcade physics.
-- `src/server/Track.luau`: circuit, jumps, checkpoint gates and scenery.
-- `src/server/main.server.luau`: player lifecycle, authoritative racing and snapshots.
-- `src/client/main.client.luau`: race HUD and controls.
-- `src/shared/RaceRules.luau`: engine-independent lap and gate rules.
-
-The server owns bike physics and computes gate crossings and lap times. Clients send bounded control requests, not checkpoint progress or lap results. This is a starter, with no monetization or persistent player data. To publish, open the built place in Studio and use **File → Publish to Roblox** after playtesting.
+Read these before expanding the collection. Record actual handling evidence and fix the first failed station; do not compensate with hidden stabilization. Best lap and lap count are server-session values only. Roblox game publication is a separate user action after playtesting.

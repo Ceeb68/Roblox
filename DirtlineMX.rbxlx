@@ -31,15 +31,799 @@
 
 return table.freeze({
 	GameName = "Dirtline MX",
-	StateInterval = 0.2,
+	Mode = "PhysicsLab",
+	StateInterval = 0.1,
 	ResetCooldown = 2,
-	ArenaLimit = 330,
+	ArenaLimit = 600,
 	OutOfBoundsY = -30,
 })
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="4">
+      <Item class="Folder" referent="4">
+        <Properties>
+          <string name="Name">Physics</string>
+        </Properties>
+        <Item class="ModuleScript" referent="5">
+          <Properties>
+            <string name="Name">Bike250</string>
+            <string name="Source"><![CDATA[--!strict
+-- Fictional 250cc four-stroke calibration, in SI units. These are prototype
+-- engineering values, not manufacturer measurements or an MX Bikes replica.
+local Bike250 = {
+	Name = "DL-MX 250F",
+	Version = 1,
+	MetresPerStud = 0.28,
+	Gravity = 9.81,
+	FixedStep = 1 / 240,
+	MaxSubsteps = 12,
+	BikeMass = 109,
+	RiderMass = 78,
+	Wheelbase = 1.48,
+	FrontRadius = 0.348,
+	RearRadius = 0.335,
+	FrontInertia = 0.62,
+	RearInertia = 0.72,
+	Steering = {
+		MaxAngle = math.rad(34),
+		Inertia = 0.42,
+		InputTorque = 16,
+		Damping = 2.5,
+		Trail = 0.085,
+		Caster = math.rad(26),
+	},
+	Rider = {
+		ForeAftTravel = 0.26,
+		SideTravel = 0.18,
+		StandingHeight = 0.22,
+		MoveRate = 2.2,
+		RollInertia = 3.2,
+		PitchInertia = 5.2,
+		MaxRoll = math.rad(23),
+		MaxPitch = math.rad(28),
+		MaxReactionTorque = 75,
+	},
+	Suspension = {
+		Front = { RestLength = 0.47, Travel = 0.30, SpringRate = 18000, Compression = 1500, Rebound = 2100, Preload = 0.012, BumpRate = 140000 },
+		Rear = { RestLength = 0.44, Travel = 0.30, SpringRate = 19500, Compression = 1700, Rebound = 2400, Preload = 0.014, BumpRate = 155000 },
+	},
+	Tire = {
+		LongitudinalStiffness = 10,
+		LateralStiffness = 7,
+		CamberStiffness = 0.65,
+		RelaxationLength = 0.25,
+		MinimumSpeed = 1.5,
+		ReferenceLoad = 920,
+		LoadSensitivity = 0.10,
+		RollingResistance = 0.015,
+	},
+	Surfaces = {
+		dirt = { Grip = 0.85, Rolling = 0.025 },
+		loam = { Grip = 0.90, Rolling = 0.04 },
+		hardpack = { Grip = 1.02, Rolling = 0.015 },
+		sand = { Grip = 0.62, Rolling = 0.085 },
+		mud = { Grip = 0.40, Rolling = 0.06 },
+		grass = { Grip = 0.60, Rolling = 0.03 },
+		concrete = { Grip = 1.05, Rolling = 0.012 },
+	},
+	Drive = {
+		IdleRPM = 2200,
+		StallRPM = 650,
+		RedlineRPM = 13500,
+		EngineInertia = 0.035,
+		RearInertia = 0.72,
+		PrimaryRatio = 3.35,
+		FinalRatio = 3.85,
+		GearRatios = { 2.14, 1.75, 1.45, 1.22, 1.06 },
+		Efficiency = 0.94,
+		ClutchCapacity = 43,
+		EngineBrakeTorque = 7.5,
+		FrictionTorque = 1.3,
+		ShiftCutTime = 0.07,
+		FrontBrakeTorque = 340,
+		RearBrakeTorque = 190,
+		TorqueCurve = { { 0, 0 }, { 2200, 10 }, { 4000, 17 }, { 6500, 23 }, { 9000, 28.5 }, { 11000, 27 }, { 12500, 22 }, { 13500, 15 } },
+	},
+	Crash = {
+		GroundRoll = math.rad(67),
+		LoopPitch = math.rad(82),
+		LandingAngle = math.rad(38),
+		LandingSpeed = 7.5,
+		SideLandingSpeed = 6,
+		RecoveryDelay = 2.5,
+	},
+}
+
+return Bike250
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="6">
+          <Properties>
+            <string name="Name">Controls</string>
+            <string name="Source"><![CDATA[--!strict
+-- Network boundary: accept controls, never client physics poses or lap results.
+local Controls = {}
+
+local AXES: { [string]: { number } } = {
+	throttle = { 0, 1 }, frontBrake = { 0, 1 }, rearBrake = { 0, 1 }, clutch = { 0, 1 },
+	steer = { -1, 1 }, lean = { -1, 1 }, bodyForward = { -1, 1 }, bodySide = { -1, 1 },
+}
+local TUNING: { [string]: { number } } = {
+	SpringRate = { 8000, 40000 }, Compression = { 300, 5000 },
+	Rebound = { 300, 6000 }, Preload = { 0, 0.035 },
+}
+
+local function finite(value: any): boolean
+	return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+
+function Controls.neutral(seq: number?): any
+	return {
+		seq = seq or 0, throttle = 0, frontBrake = 0, rearBrake = 0, clutch = 1,
+		steer = 0, lean = 0, bodyForward = 0, bodySide = 0,
+		standing = false, footDown = true, shift = 0,
+	}
+end
+
+function Controls.normalize(packet: any, lastSeq: number): any?
+	if type(packet) ~= "table" or not finite(packet.seq) or packet.seq % 1 ~= 0
+		or packet.seq <= lastSeq or packet.seq > 2147483647 then
+		return nil
+	end
+	if type(packet.standing) ~= "boolean" or type(packet.footDown) ~= "boolean"
+		or not finite(packet.shift) or packet.shift % 1 ~= 0 or math.abs(packet.shift) > 1 then
+		return nil
+	end
+	local result = Controls.neutral(packet.seq)
+	for axis, range in AXES do
+		local value = packet[axis]
+		if not finite(value) then
+			return nil
+		end
+		result[axis] = math.clamp(value, range[1], range[2])
+	end
+	result.standing = packet.standing
+	result.footDown = packet.footDown
+	result.shift = packet.shift
+	return result
+end
+
+function Controls.normalizeSetup(changes: any, current: any): any?
+	if type(changes) ~= "table" then
+		return nil
+	end
+	local result = { Front = table.clone(current.Front), Rear = table.clone(current.Rear) }
+	local count = 0
+	for axle, values in changes do
+		if (axle ~= "Front" and axle ~= "Rear") or type(values) ~= "table" then
+			return nil
+		end
+		for key, value in values do
+			local range = TUNING[key]
+			if not range or not finite(value) or value < range[1] or value > range[2] then
+				return nil
+			end
+			result[axle][key] = value
+			count += 1
+		end
+	end
+	return if count > 0 then result else nil
+end
+
+return Controls
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="7">
+          <Properties>
+            <string name="Name">Crash</string>
+            <string name="Source"><![CDATA[--!strict
+-- Observe physical failure; this module never applies a crash impulse, targets
+-- an orientation, or modifies velocity. Tire/body forces produce the fall.
+local Crash = {}
+
+function Crash.evaluate(sample: any, cfg: any): string?
+	if sample.landing then
+		local roll = math.abs(sample.landingRoll or sample.roll or 0)
+		local pitch = sample.landingPitch or sample.pitch or 0
+		local impact = sample.normalImpactSpeed or 0
+		if impact >= cfg.LandingSpeed and math.abs(pitch) >= cfg.LandingAngle then
+			return if pitch < 0 then "Nose-heavy landing" else "Rear-heavy landing"
+		end
+		if (sample.sideLandingSpeed or 0) >= cfg.SideLandingSpeed and impact > 2 then
+			return "Sideways landing"
+		end
+		if roll > cfg.LandingAngle and impact > 3 then
+			return "Landing on the side"
+		end
+	end
+	if sample.grounded then
+		if (sample.pitch or 0) > cfg.LoopPitch and sample.rearContact then
+			return "Loop-out"
+		end
+		if sample.rearGripRecovered and math.abs(sample.rollRate or 0) > 5 and math.abs(sample.roll or 0) > 0.5 then
+			return "High-side"
+		end
+		if math.abs(sample.roll or 0) >= cfg.GroundRoll then
+			if sample.frontSliding and (sample.frontUtilization or 0) >= 0.9 then
+				return "Front-wheel washout"
+			elseif sample.rearSliding then
+				return "Rear-wheel low-side"
+			end
+			return "Lost balance"
+		end
+	end
+	if sample.bodyContact then
+		if math.abs(sample.roll or 0) >= cfg.GroundRoll then
+			return "Lost balance"
+		elseif math.abs(sample.pitch or 0) >= cfg.LoopPitch then
+			return "Over-rotated impact"
+		elseif (sample.speed or 0) > 3 then
+			return "Chassis impact"
+		end
+	end
+	return nil
+end
+
+function Crash.canRecover(crashedAt: number, now: number, cfg: any): boolean
+	return now == now and crashedAt == crashedAt and math.abs(now) < math.huge
+		and math.abs(crashedAt) < math.huge and now - crashedAt >= cfg.RecoveryDelay
+end
+
+return Crash
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="8">
+          <Properties>
+            <string name="Name">Drivetrain</string>
+            <string name="Source"><![CDATA[--!strict
+-- SI-unit engine, manual gearbox, dry clutch, and rear wheel. This module
+-- does not prescribe vehicle speed: the tire model supplies signed axle torque.
+local Drivetrain = {}
+
+export type DriveConfig = {
+	IdleRPM: number,
+	StallRPM: number,
+	RedlineRPM: number,
+	EngineInertia: number,
+	RearInertia: number,
+	PrimaryRatio: number,
+	FinalRatio: number,
+	GearRatios: { number },
+	Efficiency: number,
+	ClutchCapacity: number,
+	EngineBrakeTorque: number,
+	FrictionTorque: number,
+	ShiftCutTime: number,
+	RearBrakeTorque: number,
+	TorqueCurve: { { number } },
+}
+
+export type Controls = { throttle: number, clutch: number, rearBrake: number? }
+export type State = {
+	gear: number,
+	engineOmega: number,
+	rearOmega: number,
+	stalled: boolean,
+	shiftTimer: number,
+	limiter: boolean,
+}
+export type Output = {
+	rearOmega: number,
+	rpm: number,
+	gear: number,
+	stalled: boolean,
+	clutchSlip: number,
+	engineReaction: number,
+	power: number,
+}
+
+local RPM_TO_RAD = math.pi / 30
+local MAX_STEP = 1 / 240
+
+local function finite(value: number): boolean
+	return value == value and math.abs(value) < math.huge
+end
+
+local function normalized(value: number): number
+	return if finite(value) then math.clamp(value, 0, 1) else 0
+end
+
+local function ratioFor(gear: number, cfg: DriveConfig): number
+	return if gear == 0 then 0 else cfg.PrimaryRatio * cfg.GearRatios[gear] * cfg.FinalRatio
+end
+
+local function curveTorque(rpm: number, cfg: DriveConfig): number
+	local curve = cfg.TorqueCurve
+	if rpm <= curve[1][1] then
+		return curve[1][2]
+	end
+	for index = 2, #curve do
+		local previous, point = curve[index - 1], curve[index]
+		if rpm <= point[1] then
+			local alpha = (rpm - previous[1]) / (point[1] - previous[1])
+			return previous[2] + (point[2] - previous[2]) * alpha
+		end
+	end
+	return curve[#curve][2]
+end
+
+-- Coulomb brake impulse opposes the current motion and cannot start reverse
+-- motion. This is used for bearing/pumping drag and the independent rear brake.
+local function retard(omega: number, impulse: number, inertia: number): number
+	local change = math.min(math.abs(omega), math.max(0, impulse) / inertia)
+	return omega - math.sign(omega) * change
+end
+
+function Drivetrain.new(cfg: DriveConfig): State
+	assert(cfg.EngineInertia > 0 and cfg.RearInertia > 0, "Rotor inertia must be positive")
+	assert(cfg.IdleRPM > cfg.StallRPM and cfg.StallRPM > 0, "Idle must be above stall RPM")
+	assert(cfg.RedlineRPM > cfg.IdleRPM, "Redline must be above idle RPM")
+	assert(cfg.PrimaryRatio > 0 and cfg.FinalRatio > 0 and #cfg.GearRatios > 0, "Invalid gearing")
+	assert(cfg.Efficiency > 0 and cfg.Efficiency <= 1 and cfg.ClutchCapacity >= 0, "Invalid clutch")
+	assert(#cfg.TorqueCurve >= 2, "An engine requires at least two torque-curve samples")
+	for index, point in cfg.TorqueCurve do
+		assert(point[2] >= 0 and (index == 1 or point[1] > cfg.TorqueCurve[index - 1][1]), "Invalid torque curve")
+	end
+	for _, ratio in cfg.GearRatios do
+		assert(ratio > 0, "Gear ratios must be positive")
+	end
+	return {
+		gear = 0,
+		engineOmega = cfg.IdleRPM * RPM_TO_RAD,
+		rearOmega = 0,
+		stalled = false,
+		shiftTimer = 0,
+		limiter = false,
+	}
+end
+
+function Drivetrain.shift(state: State, delta: number, controls: Controls, cfg: DriveConfig): boolean
+	if delta ~= 1 and delta ~= -1 then
+		return false
+	end
+	local nextGear = state.gear + delta
+	if nextGear < 0 or nextGear > #cfg.GearRatios or state.shiftTimer > 0 then
+		return false
+	end
+	-- The prototype models a dog gearbox and an ignition interruption. It does
+	-- not synchronize RPM or change wheel momentum when the rider selects gear.
+	if normalized(controls.clutch) < 0.8 and normalized(controls.throttle) > 0.08 then
+		return false
+	end
+	state.gear = nextGear
+	state.shiftTimer = cfg.ShiftCutTime
+	return true
+end
+
+function Drivetrain.start(state: State, controls: Controls, cfg: DriveConfig): boolean
+	if not state.stalled or (state.gear ~= 0 and normalized(controls.clutch) <= 0.8) then
+		return false
+	end
+	-- A starter adds real energy; it is an explicit rider action, never an
+	-- automatic stall recovery or an engine-speed reset during normal riding.
+	state.stalled = false
+	state.limiter = false
+	state.engineOmega = cfg.IdleRPM * RPM_TO_RAD
+	return true
+end
+
+function Drivetrain.step(state: State, input: Controls, rearContactTorque: number, dt: number, cfg: DriveConfig): Output
+	assert(finite(dt) and dt >= 0, "Drivetrain dt must be finite and nonnegative")
+	assert(finite(rearContactTorque), "Rear contact torque must be finite")
+	local throttle = normalized(input.throttle)
+	local engagement = 1 - normalized(input.clutch)
+	local rearBrake = normalized(input.rearBrake or 0)
+	local ratio = ratioFor(state.gear, cfg)
+	local initialMomentum = cfg.EngineInertia * state.engineOmega + cfg.RearInertia * state.rearOmega
+	local shaftWork = 0
+	local substeps = math.max(1, math.ceil(dt / MAX_STEP))
+	local h = dt / substeps
+
+	if dt > 0 then
+		for _ = 1, substeps do
+			local previousEngine = state.engineOmega
+			local rpm = math.max(0, previousEngine / RPM_TO_RAD)
+			if rpm >= cfg.RedlineRPM then
+				state.limiter = true
+			elseif rpm < cfg.RedlineRPM * 0.97 then
+				state.limiter = false
+			end
+
+			local combustion = 0
+			local losses = cfg.FrictionTorque + cfg.EngineBrakeTorque * (1 - throttle)
+			if not state.stalled and not state.limiter and state.shiftTimer <= 0 then
+				-- A bounded idle-air governor supplies torque, not an RPM constraint.
+				-- It can keep an unloaded engine alive, but cannot resist a clutch dump.
+				local idleOmega = cfg.IdleRPM * RPM_TO_RAD
+				local idleTorque = math.clamp(cfg.FrictionTorque + cfg.EngineBrakeTorque
+					+ (idleOmega - previousEngine) * cfg.EngineInertia * 12, 0, curveTorque(cfg.IdleRPM, cfg))
+				combustion = throttle * curveTorque(rpm, cfg) + (1 - throttle) * idleTorque
+			end
+			state.engineOmega += combustion * h / cfg.EngineInertia
+			state.engineOmega = retard(state.engineOmega, losses * h, cfg.EngineInertia)
+			-- Mechanical power at the crank, signed during engine braking. Using
+			-- average omega makes this equal the free crank's kinetic energy change.
+			shaftWork += 0.5 * cfg.EngineInertia * (state.engineOmega ^ 2 - previousEngine ^ 2)
+			state.rearOmega += rearContactTorque * h / cfg.RearInertia
+
+			if ratio > 0 and engagement > 0 then
+				-- Implicit two-inertia clutch: a single bounded angular impulse
+				-- removes slip without overshoot, regardless of clutch stiffness/dt.
+				local slip = state.engineOmega - state.rearOmega * ratio
+				local inverseInertia = 1 / cfg.EngineInertia + ratio ^ 2 / cfg.RearInertia
+				local limit = cfg.ClutchCapacity * engagement * h
+				local impulse = math.clamp(slip / inverseInertia, -limit, limit)
+				state.engineOmega -= impulse / cfg.EngineInertia
+				state.rearOmega += impulse * ratio / cfg.RearInertia
+				-- Transmission loss is an additional opposing wheel impulse. First
+				-- solve the ideal coupling, then dissipate energy; multiplying a signed
+				-- drive impulse by efficiency would add energy during back-driving.
+				state.rearOmega = retard(state.rearOmega, (1 - cfg.Efficiency) * math.abs(impulse * ratio), cfg.RearInertia)
+			end
+
+			state.rearOmega = retard(state.rearOmega, rearBrake * cfg.RearBrakeTorque * h, cfg.RearInertia)
+			if not state.stalled and state.engineOmega < cfg.StallRPM * RPM_TO_RAD then
+				state.stalled = true
+				state.limiter = false
+			end
+			state.shiftTimer = math.max(0, state.shiftTimer - h)
+		end
+	end
+
+	local finalMomentum = cfg.EngineInertia * state.engineOmega + cfg.RearInertia * state.rearOmega
+	return {
+		rearOmega = state.rearOmega,
+		rpm = math.max(0, state.engineOmega / RPM_TO_RAD),
+		gear = state.gear,
+		stalled = state.stalled,
+		clutchSlip = if ratio > 0 then state.engineOmega - state.rearOmega * ratio else 0,
+		-- Forward rotor spin is about -bodyRight, so increasing spin reacts
+		-- nose-up about +bodyRight. Exclude the external tire torque because
+		-- the caller already applies its contact force to the rigid chassis.
+		engineReaction = if dt > 0 then (finalMomentum - initialMomentum) / dt - rearContactTorque else 0,
+		power = if dt > 0 then shaftWork / dt else 0,
+	}
+end
+
+return Drivetrain
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="9">
+          <Properties>
+            <string name="Name">StepBudget</string>
+            <string name="Source"><![CDATA[--!strict
+-- Native simulation time must not be discarded: gravity still integrates it.
+-- Normal frames use ~240 Hz contact steps. Over-budget frames use fewer,
+-- coarser contact steps, report the condition, and invalidate timed lab runs.
+local StepBudget = {}
+
+function StepBudget.plan(frameDt: number, targetDt: number, maxSteps: number): { steps: number, dt: number, duration: number, overrun: boolean }
+	assert(frameDt > 0 and frameDt < math.huge and frameDt == frameDt, "Invalid native frame interval")
+	assert(targetDt > 0 and targetDt < math.huge, "Invalid target interval")
+	assert(maxSteps >= 1 and maxSteps % 1 == 0 and maxSteps < math.huge, "Invalid substep budget")
+	local requested = math.ceil(frameDt / targetDt - 1e-9)
+	local steps = math.clamp(requested, 1, maxSteps)
+	return { steps = steps, dt = frameDt / steps, duration = frameDt, overrun = requested > maxSteps }
+end
+
+return StepBudget
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="10">
+          <Properties>
+            <string name="Name">Suspension</string>
+            <string name="Source"><![CDATA[--!strict
+-- SI-unit spring/damper contact law. Compression and velocity come from the
+-- suspension geometry; this module never invents suspension movement.
+local Suspension = {}
+
+export type State = {
+	compression: number,
+	velocity: number,
+	force: number,
+	bottomed: boolean,
+	contact: boolean,
+}
+
+export type Config = {
+	RestLength: number,
+	Travel: number,
+	SpringRate: number,
+	Compression: number,
+	Rebound: number,
+	Preload: number,
+	BumpRate: number,
+}
+
+export type Output = {
+	force: number,
+	compression: number,
+	velocity: number,
+	bottomed: boolean,
+}
+
+local function finite(value: number, fallback: number): number
+	return if value == value and math.abs(value) < math.huge then value else fallback
+end
+
+function Suspension.new(): State
+	return { compression = 0, velocity = 0, force = 0, bottomed = false, contact = false }
+end
+
+function Suspension.step(state: State, compression: number, compressionVelocity: number, contact: boolean, _dt: number, cfg: Config): Output
+	local travel = math.max(finite(cfg.Travel, 0.3), 0.001)
+	local springRate = math.max(finite(cfg.SpringRate, 0), 0)
+	local preload = math.max(finite(cfg.Preload, 0), 0)
+	-- A geometry bug or penetration must not generate an unbounded impulse.
+	-- Actual movement inside/just beyond travel still reaches the bump stop.
+	local displacement = math.clamp(finite(compression, 0), 0, travel * 2)
+	local velocity = finite(compressionVelocity, 0)
+	local force = 0
+	local bottomed = contact and displacement >= travel
+	if contact then
+		local damping = if velocity >= 0 then cfg.Compression else cfg.Rebound
+		damping = math.max(finite(damping, 0), 0)
+		local bumpBand = travel * 0.15
+		local bumpCompression = math.max(displacement - (travel - bumpBand), 0)
+		local bump = math.max(finite(cfg.BumpRate, 0), 0) * bumpCompression * bumpCompression / bumpBand
+		local spring = springRate * (displacement + preload)
+		-- Six times the fully compressed spring load is a numerical guard, not
+		-- an adjustable landing assist. Contact cannot pull the chassis down.
+		local forceLimit = math.max(springRate * (travel + preload) * 6, 1)
+		force = math.clamp(finite(spring + damping * velocity + bump, forceLimit), 0, forceLimit)
+	end
+	state.compression = displacement
+	state.velocity = velocity
+	state.force = force
+	state.bottomed = bottomed
+	state.contact = contact
+	return { force = force, compression = displacement, velocity = velocity, bottomed = bottomed }
+end
+
+return Suspension
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="11">
+          <Properties>
+            <string name="Name">Tire</string>
+            <string name="Source"><![CDATA[--!strict
+-- Independent brush contacts with distance-based stress relaxation and a
+-- combined Coulomb friction circle. All units are metres, seconds, N and Nm.
+-- Coefficients are prototype engineering choices, not measured MX tire data.
+local Tire = {}
+
+export type State = { slipRatio: number, slipAngle: number, contact: boolean }
+export type Input = {
+	normalLoad: number,
+	longitudinalVelocity: number,
+	lateralVelocity: number,
+	wheelOmega: number,
+	radius: number,
+	camber: number,
+	contact: boolean,
+}
+export type Config = {
+	LongitudinalStiffness: number,
+	LateralStiffness: number,
+	CamberStiffness: number,
+	RelaxationLength: number,
+	MinimumSpeed: number,
+	ReferenceLoad: number,
+	LoadSensitivity: number,
+	RollingResistance: number,
+}
+export type Surface = { Grip: number, Rolling: number }
+export type Output = {
+	longitudinalForce: number,
+	lateralForce: number,
+	contactTorque: number,
+	rollingTorque: number,
+	slipRatio: number,
+	slipAngle: number,
+	utilization: number,
+	sliding: boolean,
+	grip: number,
+}
+
+local function finite(value: number, fallback: number): number
+	return if value == value and math.abs(value) < math.huge then value else fallback
+end
+
+function Tire.new(): State
+	return { slipRatio = 0, slipAngle = 0, contact = false }
+end
+
+-- Evaluate an already-relaxed contact at a trial normal load. This is pure:
+-- suspension equilibrium solvers can call it without advancing patch strain.
+function Tire.evaluate(state: State, input: Input, cfg: Config, surface: Surface): Output
+	local minimumSpeed = math.max(finite(cfg.MinimumSpeed, 1.5), 0.1)
+	local omega = finite(input.wheelOmega, 0)
+	local radius = math.max(finite(input.radius, 0), 0)
+	local wheelSpeed = finite(omega * radius, 0)
+	local load = math.max(finite(input.normalLoad, 0), 0)
+	local contact = input.contact and load > 0 and radius > 0
+	local fx, fy, torque, rollingTorque, utilization, grip = 0, 0, 0, 0, 0, 0
+	local sliding = false
+	if contact then
+		local referenceLoad = math.max(finite(cfg.ReferenceLoad, 920), 1)
+		local sensitivity = math.clamp(finite(cfg.LoadSensitivity, 0), 0, 0.5)
+		-- Pneumatic tires become less efficient as their load rises. The two
+		-- axles receive separate loads; their grip is never redistributed here.
+		local loadFactor = math.clamp((load / referenceLoad) ^ -sensitivity, 0.5, 1.5)
+		grip = math.max(finite(surface.Grip, 0), 0) * loadFactor
+		local capacity = grip * load
+		if capacity > 0 then
+			local demandX = load * math.max(finite(cfg.LongitudinalStiffness, 0), 0) * state.slipRatio
+			-- Positive camber is lean toward wheel-right. Camber thrust acts
+			-- toward that lean; lateral slip resists wheel-right motion.
+			local demandY = load * (-math.max(finite(cfg.LateralStiffness, 0), 0) * state.slipAngle
+				+ math.max(finite(cfg.CamberStiffness, 0), 0) * math.sin(finite(input.camber, 0)))
+			local demand = math.sqrt(demandX * demandX + demandY * demandY)
+			if demand > 0 then
+				-- Isotropic brush law: progressively slipping bristles saturate
+				-- at μN. Braking and cornering share one force budget.
+				local brushSlip = math.clamp(demand / (3 * capacity), 0, 1)
+				utilization = 1 - (1 - brushSlip) ^ 3
+				local scale = capacity * utilization / demand
+				fx = demandX * scale
+				fy = demandY * scale
+				sliding = brushSlip >= 1
+			end
+		end
+		local rolling = math.max(finite(cfg.RollingResistance, 0), 0) + math.max(finite(surface.Rolling, 0), 0)
+		-- Smooth rolling torque near zero prevents sign chatter; it consumes
+		-- wheel rotation rather than resetting velocity or inventing traction.
+		rollingTorque = -rolling * load * radius * math.tanh(wheelSpeed / minimumSpeed)
+		torque = -fx * radius + rollingTorque
+	end
+	return {
+		longitudinalForce = fx, lateralForce = fy, contactTorque = torque, rollingTorque = rollingTorque,
+		slipRatio = state.slipRatio, slipAngle = state.slipAngle,
+		utilization = utilization, sliding = sliding, grip = grip,
+	}
+end
+
+function Tire.step(state: State, input: Input, dt: number, cfg: Config, surface: Surface): Output
+	local minimumSpeed = math.max(finite(cfg.MinimumSpeed, 1.5), 0.1)
+	local relaxationLength = math.max(finite(cfg.RelaxationLength, 0.25), 0.001)
+	local vx = finite(input.longitudinalVelocity, 0)
+	local vy = finite(input.lateralVelocity, 0)
+	local radius = math.max(finite(input.radius, 0), 0)
+	local wheelSpeed = finite(finite(input.wheelOmega, 0) * radius, 0)
+	-- Smooth low-speed slip avoids dividing by near-zero chassis speed, while
+	-- retaining finite force for a spinning tire trying to accelerate at rest.
+	local denominator = math.sqrt(vx * vx + minimumSpeed * minimumSpeed)
+	local targetRatio = math.clamp(finite((wheelSpeed - vx) / denominator, 0), -20, 20)
+	local targetAngle = math.atan(vy / denominator)
+	local contact = input.contact and finite(input.normalLoad, 0) > 0 and radius > 0
+	local transportSpeed = math.max(math.abs(vx), math.abs(wheelSpeed), minimumSpeed)
+	local alpha = 1 - math.exp(-transportSpeed * math.max(finite(dt, 0), 0) / relaxationLength)
+	-- Airborne tires have no ground force. Stored patch strain can dissipate;
+	-- this changes contact memory only, never bike or wheel velocity.
+	state.slipRatio += ((if contact then targetRatio else 0) - state.slipRatio) * alpha
+	state.slipAngle += ((if contact then targetAngle else 0) - state.slipAngle) * alpha
+	state.contact = contact
+	return Tire.evaluate(state, input, cfg, surface)
+end
+
+return Tire
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="12">
+          <Properties>
+            <string name="Name">WheelContact</string>
+            <string name="Source"><![CDATA[--!strict
+-- Quasi-static unsprung-wheel equilibrium along its suspension travel axis.
+-- Tire tangential force participates in spring load, especially on a lean.
+-- Patch strain advances once; trial normal loads use the pure force evaluator.
+-- The caller injects its Tire library: Roblox resolves ModuleScripts, while
+-- standalone Luau resolves filesystem modules. This solver needs neither API.
+local WheelContact = {}
+
+type TireState = { slipRatio: number, slipAngle: number, contact: boolean }
+type TireInput = {
+	normalLoad: number, longitudinalVelocity: number, lateralVelocity: number,
+	wheelOmega: number, radius: number, camber: number, contact: boolean,
+}
+type TireConfig = {
+	LongitudinalStiffness: number, LateralStiffness: number, CamberStiffness: number,
+	RelaxationLength: number, MinimumSpeed: number, ReferenceLoad: number,
+	LoadSensitivity: number, RollingResistance: number,
+}
+type TireSurface = { Grip: number, Rolling: number }
+type TireOutput = {
+	longitudinalForce: number, lateralForce: number, contactTorque: number, rollingTorque: number,
+	slipRatio: number, slipAngle: number, utilization: number, sliding: boolean, grip: number,
+}
+export type TireModel = {
+	step: (TireState, TireInput, number, TireConfig, TireSurface) -> TireOutput,
+	evaluate: (TireState, TireInput, TireConfig, TireSurface) -> TireOutput,
+}
+export type Output = { normalLoad: number, tyre: TireOutput, axialError: number }
+
+local MAX_ITERATIONS = 10
+local RELATIVE_TOLERANCE = 1e-4
+local MAX_NORMAL_LOAD = 250000 -- Numerical penetration guard, in newtons.
+
+local function finite(value: number, fallback: number): number
+	return if value == value and math.abs(value) < math.huge then value else fallback
+end
+
+function WheelContact.step(state: TireState, input: TireInput, dt: number, cfg: TireConfig, surface: TireSurface,
+	springForce: number, normalProjection: number, forwardProjection: number, rightProjection: number, tireModel: TireModel): Output
+	local force = math.max(finite(springForce, 0), 0)
+	local c = math.clamp(finite(normalProjection, 0), -1, 1)
+	local a = math.clamp(finite(forwardProjection, 0), -1, 1)
+	local b = math.clamp(finite(rightProjection, 0), -1, 1)
+	local trial = table.clone(input)
+	local valid = input.contact and force > 0 and c > 0 and finite(input.radius, 0) > 0
+	trial.contact = valid
+	trial.normalLoad = if valid then math.min(force / math.max(c, 0.001), MAX_NORMAL_LOAD) else 0
+	-- The relaxation targets do not depend on positive normal-load magnitude.
+	-- This single call updates the tire state for the whole contact solve.
+	local first = tireModel.step(state, trial, dt, cfg, surface)
+	if not valid then
+		return { normalLoad = 0, tyre = first, axialError = if input.contact and force > 0 then -force else 0 }
+	end
+	local tolerance = math.max(force * RELATIVE_TOLERANCE, 1e-6)
+	local function errorAt(load: number): (number, TireOutput)
+		trial.normalLoad = load
+		local tyre = tireModel.evaluate(state, trial, cfg, surface)
+		local error = load * c + tyre.longitudinalForce * a + tyre.lateralForce * b - force
+		return error, tyre
+	end
+	local bestLoad = trial.normalLoad
+	local bestTyre = first
+	local bestError = bestLoad * c + first.longitudinalForce * a + first.lateralForce * b - force
+	if math.abs(bestError) <= tolerance then
+		return { normalLoad = bestLoad, tyre = first, axialError = bestError }
+	end
+	local low, lowError = 0, -force
+	local high, highError = bestLoad, bestError
+	if bestError < 0 then
+		low, lowError = bestLoad, bestError
+		-- This conservative upper bound uses the maximal allowed μ and the
+		-- friction circle to cover tangential forces opposing the travel axis.
+		local gripBound = math.max(finite(surface.Grip, 0), 0) * 1.5
+		local tangentProjection = math.sqrt(a * a + b * b)
+		high = math.min(force / math.max(c - gripBound * tangentProjection, 0.05), MAX_NORMAL_LOAD)
+		high = math.max(high, low)
+		local upperTyre: TireOutput
+		highError, upperTyre = errorAt(high)
+		if math.abs(highError) < math.abs(bestError) then bestLoad, bestTyre, bestError = high, upperTyre, highError end
+		if math.abs(highError) <= tolerance or highError <= 0 or high <= low then
+			-- No positive root within the numerical bound: preserve finite
+			-- physical forces and report the residual; never fake stabilization.
+			return { normalLoad = bestLoad, tyre = bestTyre, axialError = bestError }
+		end
+	end
+	for iteration = 1, MAX_ITERATIONS do
+		local width = high - low
+		local load = low - lowError * width / (highError - lowError)
+		-- A bracketed secant is normally enough for this nearly linear contact
+		-- law. Periodic bisection prevents pathological endpoint stagnation.
+		if iteration % 4 == 0 or load <= low or load >= high then load = (low + high) * 0.5 end
+		local error, tyre = errorAt(load)
+		if math.abs(error) < math.abs(bestError) then bestLoad, bestTyre, bestError = load, tyre, error end
+		if math.abs(error) <= tolerance then break end
+		if error > 0 then high, highError = load, error else low, lowError = load, error end
+	end
+	return { normalLoad = bestLoad, tyre = bestTyre, axialError = bestError }
+end
+
+return WheelContact
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">RaceRules</string>
           <string name="Source"><![CDATA[--!strict
@@ -129,373 +913,428 @@ return RaceRules
       </Item>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="5">
+  <Item class="ServerScriptService" referent="14">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Folder" referent="6">
+    <Item class="Folder" referent="15">
       <Properties>
         <string name="Name">Motocross</string>
       </Properties>
-      <Item class="ModuleScript" referent="7">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">Bikes</string>
           <string name="Source"><![CDATA[--!strict
-
--- Server-owned arcade bikes. Forces keep gravity and ramp launches intact;
--- an orientation constraint supplies the balance a two-wheel vehicle needs.
+-- Phase 1 SI adapter. Roblox advances the native, unanchored rigid body.
+-- PreSimulation samples geometry once; tyre/drivetrain state uses 240Hz steps.
+-- Roblox itself is NOT claimed to have a guaranteed 240Hz rigid-body timestep.
+-- No attitude targets, steering/landing corrections, velocity locks or speed cap.
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Physics = ReplicatedStorage:WaitForChild("Motocross"):WaitForChild("Physics")
+local Bike250 = require(Physics:WaitForChild("Bike250"))
+local Drivetrain = require(Physics:WaitForChild("Drivetrain"))
+local Suspension = require(Physics:WaitForChild("Suspension"))
+local Tire = require(Physics:WaitForChild("Tire"))
+local WheelContact = require(Physics:WaitForChild("WheelContact"))
+local StepBudget = require(Physics:WaitForChild("StepBudget"))
+local Controls = require(Physics:WaitForChild("Controls"))
+local Crash = require(Physics:WaitForChild("Crash"))
 
 local Bikes = {}
 Bikes.__index = Bikes
-
-local TOP_SPEED = 100 -- studs/second (about 101 km/h)
-local REVERSE_SPEED = 24
-local ENGINE_ACCELERATION = 44
-local BRAKE_ACCELERATION = 95
 local INPUT_TIMEOUT = 0.5
-local STUDS_TO_KMH = 0.28 * 3.6
-local WHEEL_RADIUS = 1.05
-local WHEEL_BASE = 1.75
-local WHEEL_HEIGHT = -0.7
-
 local ORANGE = Color3.fromRGB(255, 119, 34)
 local TEAL = Color3.fromRGB(28, 218, 192)
 local BLACK = Color3.fromRGB(23, 29, 35)
 local METAL = Color3.fromRGB(148, 161, 172)
-
-type BikeRecord = {
-	model: Model,
-	chassis: Part,
-	seat: VehicleSeat,
-	force: VectorForce,
-	balance: AlignOrientation,
-	connections: { RBXScriptConnection },
-	wheels: { Motor6D },
-	wheelOffsets: { CFrame },
-	yaw: number,
-	normal: Vector3,
-	wheelAngle: number,
-	wheelElapsed: number,
-	throttle: number,
-	steer: number,
-	brake: boolean,
-	lastInput: number,
-	lastAcceptedInput: number,
-	raycast: RaycastParams,
-}
-
-type Service = {
-	_folder: Folder,
-	_bikes: { [Player]: BikeRecord },
-	spawn: (Service, Player, CFrame) -> Model,
-	remove: (Service, Player) -> (),
-	input: (Service, Player, number, number, boolean) -> (),
-	update: (Service, number) -> (),
-	getBike: (Service, Player) -> Model?,
-	getSpeed: (Service, Player) -> number,
-	getPosition: (Service, Player) -> Vector3?,
-	isRiding: (Service, Player) -> boolean,
-}
+type Record = any
+type Service = any
 
 local function finite(value: number): boolean
-	return value == value and value > -math.huge and value < math.huge
+	return value == value and math.abs(value) < math.huge
 end
-
 local function unitOr(vector: Vector3, fallback: Vector3): Vector3
-	if vector.Magnitude > 0.001 then
-		return vector.Unit
-	end
-	return fallback
+	return if vector.Magnitude > 1e-6 then vector.Unit else fallback
 end
-
-local function weld(base: BasePart, part: BasePart)
-	local connection = Instance.new("WeldConstraint")
-	connection.Part0 = base
-	connection.Part1 = part
-	connection.Parent = part
+local function clone(value: any): any
+	if typeof(value) ~= "table" then return value end
+	local result = {}
+	for key, child in value do result[key] = clone(child) end
+	return result
 end
-
-local function cosmetic(
-	model: Model,
-	base: BasePart,
-	name: string,
-	size: Vector3,
-	localCFrame: CFrame,
-	color: Color3,
-	material: Enum.Material?
-): Part
+local function idleInput(footDown: boolean, standing: boolean): any
+	return { throttle = 0, frontBrake = 0, rearBrake = 0, clutch = 1,
+		steer = 0, lean = 0, bodyForward = 0, bodySide = 0,
+		standing = standing, footDown = footDown, shift = 0, seq = 0 }
+end
+local function motor(base: BasePart, part: BasePart, offset: CFrame): Motor6D
+	local joint = Instance.new("Motor6D")
+	joint.Name = part.Name .. "Joint"; joint.Part0 = base; joint.Part1 = part
+	joint.C0 = offset; joint.Parent = base
+	return joint
+end
+local function cosmetic(model: Model, chassis: BasePart, name: string, size: Vector3, offset: CFrame, color: Color3): Part
 	local part = Instance.new("Part")
-	part.Name = name
-	part.Size = size
-	part.CFrame = base.CFrame * localCFrame
-	part.Color = color
-	part.Material = material or Enum.Material.SmoothPlastic
-	part.CanCollide = false
-	part.CanTouch = false
-	part.CanQuery = false
-	part.Massless = true
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Name = name; part.Size = size; part.CFrame = chassis.CFrame * offset
+	part.Color = color; part.Material = Enum.Material.SmoothPlastic
+	part.CanCollide = false; part.CanTouch = false; part.CanQuery = false; part.Massless = true
 	part.Parent = model
-	weld(base, part)
+	local joint = Instance.new("WeldConstraint")
+	joint.Part0 = chassis; joint.Part1 = part; joint.Parent = part
 	return part
 end
-
-local function rod(model: Model, base: BasePart, name: string, a: Vector3, b: Vector3, width: number, color: Color3)
-	local midpoint = (a + b) / 2
-	local localCFrame = CFrame.lookAt(midpoint, b) * CFrame.Angles(0, math.pi / 2, 0)
-	local part = cosmetic(model, base, name, Vector3.new((b - a).Magnitude, width, width), localCFrame, color, Enum.Material.Metal)
-	part.Shape = Enum.PartType.Cylinder
+local function massProperties(part: BasePart, mass: number, friction: number)
+	part.CustomPhysicalProperties = PhysicalProperties.new(mass / (part.Size.X * part.Size.Y * part.Size.Z), friction, 0, 100, 100)
+end
+local function updateLink(link: any, a: Vector3, b: Vector3, width: number, m: number)
+	local length = math.max((b - a).Magnitude, 0.01)
+	link.part.Size = Vector3.new(length, width, width) / m
+	link.joint.C0 = CFrame.lookAt((a + b) / (2 * m), b / m) * CFrame.Angles(0, math.pi / 2, 0)
+end
+local function makeLink(model: Model, chassis: Part, name: string, a: Vector3, b: Vector3, width: number, m: number): any
+	local part = Instance.new("Part")
+	part.Name = name; part.Shape = Enum.PartType.Cylinder; part.Color = METAL; part.Material = Enum.Material.Metal
+	part.CanCollide = false; part.CanTouch = false; part.CanQuery = false; part.Massless = true; part.Parent = model
+	local link = { part = part, joint = motor(chassis, part, CFrame.identity) }
+	updateLink(link, a, b, width, m)
+	part.CFrame = chassis.CFrame * link.joint.C0
+	return link
+end
+local function applyForce(record: Record, forceN: Vector3, point: Vector3, dt: number)
+	-- Native mass is kg; native length is studs. F_native = F_SI / m_per_stud.
+	record.chassis:ApplyImpulseAtPosition(forceN * (dt / record.cfg.MetresPerStud), point)
+end
+local function applyAngular(record: Record, momentumSI: Vector3)
+	record.chassis:ApplyAngularImpulse(momentumSI / (record.cfg.MetresPerStud ^ 2))
 end
 
-local function makeWheel(model: Model, chassis: Part, z: number, accent: Color3): (Motor6D, CFrame)
-	local offset = CFrame.new(0, WHEEL_HEIGHT, z)
-	local tire = Instance.new("Part")
-	tire.Name = if z < 0 then "FrontTire" else "RearTire"
-	tire.Shape = Enum.PartType.Cylinder
-	tire.Size = Vector3.new(0.62, WHEEL_RADIUS * 2, WHEEL_RADIUS * 2)
-	tire.CFrame = chassis.CFrame * offset
-	tire.Color = BLACK
-	tire.Material = Enum.Material.Slate
-	tire.CanCollide = false
-	tire.CanTouch = false
-	tire.CanQuery = false
-	tire.Massless = true
-	tire.Parent = model
-
-	local motor = Instance.new("Motor6D")
-	motor.Name = tire.Name .. "Axle"
-	motor.Part0 = chassis
-	motor.Part1 = tire
-	motor.C0 = offset
-	motor.Parent = chassis
-
-	for _, x in { -0.33, 0.33 } do
-		local rim = cosmetic(model, tire, "Rim", Vector3.new(0.05, 1.54, 1.54), CFrame.new(x, 0, 0), accent, Enum.Material.Metal)
-		rim.Shape = Enum.PartType.Cylinder
-		local inside = cosmetic(model, tire, "RimInset", Vector3.new(0.065, 1.32, 1.32), CFrame.new(x, 0, 0), BLACK)
-		inside.Shape = Enum.PartType.Cylinder
-		for spoke = 0, 5 do
-			cosmetic(model, tire, "Spoke", Vector3.new(0.08, 0.055, 1.36), CFrame.new(x, 0, 0) * CFrame.Angles(spoke * math.pi / 6, 0, 0), METAL, Enum.Material.Metal)
+local POSE_ATTRIBUTES = { "MotocrossRiding", "MotocrossStanding", "MotocrossBodyForward", "MotocrossBodySide", "MotocrossLean" }
+local function restoreCharacter(record: Record)
+	if record.characterConnection then record.characterConnection:Disconnect(); record.characterConnection = nil end
+	for part, saved in record.characterParts do
+		if part.Parent then part.CanCollide = saved.CanCollide; part.Massless = saved.Massless end
+	end
+	record.characterParts = {}
+	if record.character then
+		for _, name in POSE_ATTRIBUTES do record.character:SetAttribute(name, nil) end
+	end
+	record.character = nil
+end
+local function makeCharacterMassless(record: Record, character: Model)
+	restoreCharacter(record)
+	record.character = character
+	local function prepare(instance: Instance)
+		if instance:IsA("BasePart") then
+			record.characterParts[instance] = { CanCollide = instance.CanCollide, Massless = instance.Massless }
+			instance.CanCollide = false; instance.Massless = true
 		end
 	end
-	local hub = cosmetic(model, tire, "Hub", Vector3.new(0.8, 0.3, 0.3), CFrame.identity, METAL, Enum.Material.Metal)
-	hub.Shape = Enum.PartType.Cylinder
-
-	-- Rounded contact proxies avoid the snagging a welded, nonrolling cylinder
-	-- causes on ramp seams. Their visual wheels remain narrow motorcycle tires.
-	local contact = cosmetic(model, chassis, tire.Name .. "Contact", Vector3.one * (WHEEL_RADIUS * 2), offset, BLACK)
-	contact.Shape = Enum.PartType.Ball
-	contact.Transparency = 1
-	contact.CanCollide = true
-	contact.CustomPhysicalProperties = PhysicalProperties.new(1, 0.03, 0, 100, 1)
-	return motor, offset
+	for _, instance in character:GetDescendants() do prepare(instance) end
+	record.characterConnection = character.DescendantAdded:Connect(prepare)
+	character:SetAttribute("MotocrossRiding", true)
+end
+local function riding(player: Player, record: Record): boolean
+	local occupant = record.seat.Occupant
+	return not record.crashed and occupant ~= nil and occupant.Health > 0 and occupant.Parent == player.Character
 end
 
-local function riding(player: Player, record: BikeRecord): boolean
-	local humanoid = record.seat.Occupant
-	return humanoid ~= nil and humanoid.Health > 0 and humanoid.Parent == player.Character
+local function wheel(model: Model, chassis: Part, radius: number, z: number, front: boolean, m: number): Motor6D
+	local part = Instance.new("Part")
+	part.Name = if front then "FrontTire" else "RearTire"
+	part.Shape = Enum.PartType.Cylinder
+	part.Size = Vector3.new(if front then 0.085 / m else 0.115 / m, radius * 2 / m, radius * 2 / m)
+	part.Color = BLACK; part.Material = Enum.Material.Slate; part.Massless = true
+	part.CanCollide = false; part.CanTouch = false; part.CanQuery = false; part.Parent = model
+	local offset = CFrame.new(0, -0.44 / m, z / m)
+	part.CFrame = chassis.CFrame * offset
+	local joint = motor(chassis, part, offset)
+	local rim = cosmetic(model, part, "Rim", Vector3.new(0.06, radius * 1.5, radius * 1.5) / m, CFrame.identity, METAL)
+	rim.Shape = Enum.PartType.Cylinder
+	-- No wheel/sphere colliders secretly supporting the bike: tyre rays carry it.
+	return joint
 end
 
-local function buildBike(player: Player, spawnCFrame: CFrame): BikeRecord
+local function buildBike(player: Player, spawnCFrame: CFrame): Record
+	local cfg = clone(Bike250)
+	local m = cfg.MetresPerStud
 	local model = Instance.new("Model")
-	model.Name = player.Name .. "_DirtBike"
-	model:SetAttribute("OwnerUserId", player.UserId)
-	model:SetAttribute("BikeName", "Dirtline 250")
-
+	model.Name = player.Name .. "_250F"
+	model:SetAttribute("OwnerUserId", player.UserId); model:SetAttribute("BikeName", cfg.Name)
+	model:SetAttribute("PhysicsVersion", cfg.Version); model:SetAttribute("Assists", false)
 	local chassis = Instance.new("Part")
-	chassis.Name = "Chassis"
-	chassis.Size = Vector3.new(1.35, 0.85, 3.6)
-	chassis.CFrame = spawnCFrame
-	chassis.Transparency = 1
-	chassis.CanCollide = true
-	chassis.RootPriority = 127
-	chassis.CustomPhysicalProperties = PhysicalProperties.new(3, 0.03, 0, 100, 1)
-	chassis.Parent = model
-	model.PrimaryPart = chassis
-
-	cosmetic(model, chassis, "Engine", Vector3.new(0.9, 0.8, 1.15), CFrame.new(0, 0.05, 0.25), METAL, Enum.Material.Metal)
-	cosmetic(model, chassis, "Tank", Vector3.new(0.95, 0.65, 1.45), CFrame.new(0, 0.75, -0.35) * CFrame.Angles(math.rad(-9), 0, 0), ORANGE)
-	cosmetic(model, chassis, "Tail", Vector3.new(0.82, 0.22, 1.7), CFrame.new(0, 1.03, 0.9) * CFrame.Angles(math.rad(5), 0, 0), ORANGE)
-	cosmetic(model, chassis, "FrontMudguard", Vector3.new(0.88, 0.15, 1.85), CFrame.new(0, 0.58, -1.65), ORANGE)
-	cosmetic(model, chassis, "RearMudguard", Vector3.new(0.85, 0.15, 1.65), CFrame.new(0, 0.58, 1.65), TEAL)
-	for _, x in { -0.43, 0.43 } do
-		rod(model, chassis, "FrameRail", Vector3.new(x, -0.2, 0.8), Vector3.new(x, 0.7, -1.15), 0.14, ORANGE)
-		rod(model, chassis, "Swingarm", Vector3.new(x, -0.1, 0.2), Vector3.new(x, WHEEL_HEIGHT, WHEEL_BASE), 0.16, METAL)
-		rod(model, chassis, "FrontFork", Vector3.new(x * 0.8, WHEEL_HEIGHT, -WHEEL_BASE), Vector3.new(x * 0.8, 1.4, -1.05), 0.15, METAL)
-		cosmetic(model, chassis, "SideNumberPlate", Vector3.new(0.09, 0.6, 0.95), CFrame.new(x * 1.3, 0.6, 0.7), TEAL)
-		cosmetic(model, chassis, "FootPeg", Vector3.new(0.4, 0.13, 0.35), CFrame.new(x * 1.65, -0.1, 0.4), BLACK, Enum.Material.Metal)
+	chassis.Name = "Chassis"; chassis.Size = Vector3.new(0.30, 0.45, 1.20) / m
+	chassis.CFrame = spawnCFrame; chassis.Transparency = 1; chassis.CanCollide = true; chassis.RootPriority = 127
+	massProperties(chassis, cfg.BikeMass, 0.12); chassis.Parent = model; model.PrimaryPart = chassis
+	cosmetic(model, chassis, "Engine", Vector3.new(0.24, 0.30, 0.34) / m, CFrame.new(0, 0.01 / m, 0), METAL)
+	cosmetic(model, chassis, "Tank", Vector3.new(0.25, 0.22, 0.37) / m, CFrame.new(0, 0.28 / m, -0.16 / m), ORANGE)
+	cosmetic(model, chassis, "FrontMudguard", Vector3.new(0.22, 0.035, 0.55) / m, CFrame.new(0, 0.07 / m, -0.72 / m), ORANGE)
+	cosmetic(model, chassis, "RearMudguard", Vector3.new(0.23, 0.035, 0.52) / m, CFrame.new(0, 0.31 / m, 0.56 / m), TEAL)
+	cosmetic(model, chassis, "Handlebar", Vector3.new(0.80, 0.05, 0.05) / m, CFrame.new(0, 0.47 / m, -0.38 / m), METAL)
+	local guards = {}
+	for _, side in { -1, 1 } do
+		local guard = cosmetic(model, chassis, "CrashGuard", Vector3.new(0.06, 0.08, 0.15) / m, CFrame.new(side * 0.24 / m, 0.08 / m, 0), BLACK)
+		guard.CanCollide = true; guard.CanTouch = true
+		guard.CustomPhysicalProperties = PhysicalProperties.new(1, 0.12, 0, 100, 100)
+		table.insert(guards, guard)
 	end
-	rod(model, chassis, "Handlebar", Vector3.new(-0.95, 1.72, -1.03), Vector3.new(0.95, 1.72, -1.03), 0.12, METAL)
-	for _, x in { -0.85, 0.85 } do
-		local grip = cosmetic(model, chassis, "HandlebarGrip", Vector3.new(0.38, 0.18, 0.18), CFrame.new(x, 1.72, -1.03), BLACK)
-		grip.Shape = Enum.PartType.Cylinder
+	local seat = Instance.new("Seat") -- rider attachment only, never VehicleSeat propulsion
+	seat.Name = "DriverSeat"; seat.Size = Vector3.new(0.23, 0.07, 0.48) / m
+	seat.CFrame = chassis.CFrame * CFrame.new(0, 0.35 / m, 0.20 / m); seat.Color = BLACK
+	seat.CanCollide = false; seat.CanTouch = false; seat.CanQuery = false; seat.Massless = true; seat.Parent = model
+	local joint = Instance.new("WeldConstraint")
+	joint.Part0 = chassis; joint.Part1 = seat; joint.Parent = seat
+	local ballast = Instance.new("Part")
+	ballast.Name = "RiderMass"; ballast.Size = Vector3.new(0.29, 0.70, 0.23) / m
+	ballast.CFrame = chassis.CFrame * CFrame.new(0, 0.57 / m, 0.05 / m); ballast.Transparency = 1
+	ballast.CanCollide = false; ballast.CanTouch = false; ballast.CanQuery = false; ballast.Massless = false
+	massProperties(ballast, cfg.RiderMass, 0); ballast.Parent = model
+	local riderJoint = motor(chassis, ballast, CFrame.new(0, 0.57 / m, 0.05 / m))
+	local feet = {}
+	for _, side in { -1, 1 } do
+		-- Real collision support from voluntarily planted rider legs. F raises feet;
+		-- leaving them down while riding causes physical ground drag, not assistance.
+		local foot = cosmetic(model, chassis, "RiderFoot", Vector3.new(0.13, 0.07, 0.23) / m, CFrame.new(side * 0.32 / m, -0.725 / m, 0.15 / m), BLACK)
+		foot.CanCollide = true; foot.CustomPhysicalProperties = PhysicalProperties.new(1, 0.65, 0, 100, 100)
+		table.insert(feet, foot)
 	end
-	rod(model, chassis, "ExhaustPipe", Vector3.new(0.54, 0.05, -0.2), Vector3.new(0.6, 0.68, 1.6), 0.2, METAL)
-	local muffler = cosmetic(model, chassis, "Muffler", Vector3.new(0.95, 0.32, 0.32), CFrame.new(0.61, 0.73, 1.23) * CFrame.Angles(0, math.pi / 2, 0), BLACK, Enum.Material.Metal)
-	muffler.Shape = Enum.PartType.Cylinder
-
-	local plate = cosmetic(model, chassis, "FrontNumberPlate", Vector3.new(0.83, 0.65, 0.13), CFrame.new(0, 1.13, -1.33), Color3.fromRGB(244, 248, 251))
-	local plateGui = Instance.new("SurfaceGui")
-	plateGui.Face = Enum.NormalId.Front
-	plateGui.CanvasSize = Vector2.new(200, 150)
-	plateGui.LightInfluence = 0.2
-	plateGui.Parent = plate
-	local plateText = Instance.new("TextLabel")
-	plateText.Size = UDim2.fromScale(1, 1)
-	plateText.BackgroundTransparency = 1
-	plateText.Font = Enum.Font.GothamBlack
-	plateText.Text = "MX"
-	plateText.TextScaled = true
-	plateText.TextColor3 = BLACK
-	plateText.Parent = plateGui
-
-	local seat = Instance.new("VehicleSeat")
-	seat.Name = "DriverSeat"
-	seat.Size = Vector3.new(0.86, 0.24, 1.5)
-	seat.CFrame = chassis.CFrame * CFrame.new(0, 1.17, 0.5)
-	seat.Color = BLACK
-	seat.Material = Enum.Material.SmoothPlastic
-	seat.CanCollide = false
-	seat.CanTouch = false
-	seat.Massless = true
-	seat.HeadsUpDisplay = false
-	seat.MaxSpeed = 0
-	seat.Torque = 0
-	seat.TurnSpeed = 0
-	seat.Parent = model
-	weld(chassis, seat)
-
-	local frontWheel, frontOffset = makeWheel(model, chassis, -WHEEL_BASE, ORANGE)
-	local rearWheel, rearOffset = makeWheel(model, chassis, WHEEL_BASE, TEAL)
-	local attachment = Instance.new("Attachment")
-	attachment.Name = "BikeCenter"
-	attachment.Parent = chassis
-	local force = Instance.new("VectorForce")
-	force.Name = "EngineAndGrip"
-	force.Attachment0 = attachment
-	force.RelativeTo = Enum.ActuatorRelativeTo.World
-	force.ApplyAtCenterOfMass = true
-	force.Parent = chassis
-	local balance = Instance.new("AlignOrientation")
-	balance.Name = "RiderBalance"
-	balance.Mode = Enum.OrientationAlignmentMode.OneAttachment
-	balance.Attachment0 = attachment
-	balance.MaxTorque = 10000000
-	balance.MaxAngularVelocity = 7
-	balance.Responsiveness = 22
-	balance.RigidityEnabled = false
-	balance.CFrame = spawnCFrame.Rotation
-	balance.Parent = chassis
-
-	local look = spawnCFrame.LookVector
-	local direction = unitOr(Vector3.new(look.X, 0, look.Z), Vector3.new(0, 0, -1))
 	local raycast = RaycastParams.new()
-	raycast.FilterType = Enum.RaycastFilterType.Exclude
-	raycast.RespectCanCollide = true
+	raycast.FilterType = Enum.RaycastFilterType.Exclude; raycast.RespectCanCollide = true
+	local links = { forks = {}, swingarms = {} }
+	for _, side in { -1, 1 } do
+		table.insert(links.forks, makeLink(model, chassis, "FrontFork", Vector3.new(side * 0.064, 0.36, -0.35), Vector3.new(side * 0.064, -0.44, -cfg.Wheelbase / 2), 0.042, m))
+		table.insert(links.swingarms, makeLink(model, chassis, "Swingarm", Vector3.new(side * 0.075, -0.16, 0.20), Vector3.new(side * 0.075, -0.44, cfg.Wheelbase / 2), 0.045, m))
+	end
+	links.shock = makeLink(model, chassis, "RearShock", Vector3.new(0, 0.23, 0.15), Vector3.new(0, -0.30, 0.47), 0.060, m)
 	return {
-		model = model,
-		chassis = chassis,
-		seat = seat,
-		force = force,
-		balance = balance,
-		connections = {},
-		wheels = { frontWheel, rearWheel },
-		wheelOffsets = { frontOffset, rearOffset },
-		yaw = math.atan2(-direction.X, -direction.Z),
-		normal = Vector3.yAxis,
-		wheelAngle = 0,
-		wheelElapsed = 0,
-		throttle = 0,
-		steer = 0,
-		brake = true,
-		lastInput = -math.huge,
-		lastAcceptedInput = -math.huge,
-		raycast = raycast,
+		cfg = cfg, model = model, chassis = chassis, seat = seat, ballast = ballast, riderJoint = riderJoint,
+		feet = feet, guards = guards, links = links, frontWheel = wheel(model, chassis, cfg.FrontRadius, -cfg.Wheelbase / 2, true, m),
+		rearWheel = wheel(model, chassis, cfg.RearRadius, cfg.Wheelbase / 2, false, m),
+		frontSuspension = Suspension.new(), rearSuspension = Suspension.new(), frontTire = Tire.new(), rearTire = Tire.new(),
+		drive = Drivetrain.new(cfg.Drive), input = idleInput(true, false), lastSeq = -1,
+		lastInput = -math.huge, lastAcceptedInput = -math.huge, raycast = raycast,
+		connections = {}, characterParts = {}, characterConnection = nil, character = nil, poseElapsed = 0,
+		seatJoint = nil, seatJointBase = nil,
+		frontOmega = 0, frontAngle = 0, rearAngle = 0, steerAngle = 0, steerRate = 0,
+		frontCompression = 0, rearCompression = 0,
+		riderPosition = Vector3.new(0, 0.57, 0.05), riderVelocity = Vector3.zero,
+		riderRoll = 0, riderRollVelocity = 0, riderPitch = 0, riderPitchVelocity = 0, riderMomentum = Vector3.zero,
+		budgetOverrunCount = 0, maxFrameDt = 0, grounded = false, airborneFor = 0,
+		crashed = false, crashedAt = 0, crashReason = nil, bodyContactAt = -math.huge,
+		previousRearSliding = false, setupVersion = 1, telemetry = {},
 	}
 end
 
+local function surface(record: Record, hit: RaycastResult): (any, string)
+	local instance: Instance? = hit.Instance
+	while instance and instance ~= workspace do
+		local name = instance:GetAttribute("PhysicsSurface") or instance:GetAttribute("SurfaceType")
+		if typeof(name) == "string" and record.cfg.Surfaces[string.lower(name)] then return record.cfg.Surfaces[string.lower(name)], string.lower(name) end
+		instance = instance.Parent
+	end
+	local material = hit.Material
+	local name = if material == Enum.Material.Sand then "sand" elseif material == Enum.Material.Mud then "mud"
+		elseif material == Enum.Material.Grass then "grass"
+		elseif material == Enum.Material.Concrete or material == Enum.Material.Asphalt then "concrete" else "dirt"
+	return record.cfg.Surfaces[name], name
+end
+
+local function contact(record: Record, front: boolean, frameDt: number): any
+	local cfg = record.cfg
+	local sus = if front then cfg.Suspension.Front else cfg.Suspension.Rear
+	local frame = record.chassis.CFrame
+	local downLocal = if front then Vector3.new(0, -math.cos(cfg.Steering.Caster), -math.sin(cfg.Steering.Caster)) else -Vector3.yAxis
+	local restAxle = Vector3.new(0, -0.44, if front then -cfg.Wheelbase / 2 else cfg.Wheelbase / 2)
+	local anchorLocal = restAxle - downLocal * sus.RestLength
+	local anchor = frame:PointToWorldSpace(anchorLocal / cfg.MetresPerStud)
+	local down = frame:VectorToWorldSpace(downLocal)
+	local radius = if front then cfg.FrontRadius else cfg.RearRadius
+	local axis = Vector3.yAxis * math.cos(cfg.Steering.Caster) + Vector3.zAxis * math.sin(cfg.Steering.Caster)
+	local wheelFrame = if front then frame * CFrame.fromAxisAngle(axis, -record.steerAngle) else frame
+	local hit = workspace:Raycast(anchor, down * ((sus.RestLength + radius + 0.08) / cfg.MetresPerStud), record.raycast)
+	local compression = 0
+	local point = anchor
+	if hit and -down:Dot(hit.Normal) > 0.20 then
+		local tyreNormal = unitOr(hit.Normal - wheelFrame.RightVector * wheelFrame.RightVector:Dot(hit.Normal), hit.Normal)
+		local radiusNormal = radius * math.max(0, tyreNormal:Dot(hit.Normal))
+		local distance = hit.Distance * cfg.MetresPerStud - radiusNormal / math.max(0.20, -down:Dot(hit.Normal))
+		compression = math.max(0, sus.RestLength - distance)
+		-- The cast follows fork travel, but force acts at the wheel's actual
+		-- tangent point, rather than the ray hit (which biases caster wheelbase).
+		point = anchor + down * (distance / cfg.MetresPerStud) - tyreNormal * (radius / cfg.MetresPerStud)
+		if distance > sus.RestLength then hit = nil; compression = 0 end
+	else hit = nil end
+	local previous = if front then record.frontCompression else record.rearCompression
+	local velocity = if hit then (compression - previous) / math.max(frameDt, cfg.FixedStep) else 0
+	if front then record.frontCompression = compression else record.rearCompression = compression end
+	local surfaceCfg, surfaceName = cfg.Surfaces.dirt, "dirt"
+	if hit then surfaceCfg, surfaceName = surface(record, hit) end
+	return { hit = hit, compression = compression, compressionVelocity = velocity, down = down,
+		downLocal = downLocal, anchorLocal = anchorLocal, radius = radius, wheelFrame = wheelFrame, point = point,
+		surface = surfaceCfg, surfaceName = surfaceName }
+end
+
+local function pose(record: Record, normal: Vector3): (number, number)
+	local frame = record.chassis.CFrame
+	local forward = unitOr(frame.LookVector - normal * frame.LookVector:Dot(normal), frame.LookVector)
+	local right = unitOr(forward:Cross(normal), frame.RightVector)
+	return math.atan2(frame.UpVector:Dot(right), frame.UpVector:Dot(normal)), math.atan2(frame.LookVector:Dot(normal), frame.UpVector:Dot(normal))
+end
+
+local function advanceRider(record: Record, input: any, dt: number)
+	if record.crashed then return end
+	local cfg = record.cfg.Rider
+	local target = Vector3.new(input.bodySide * cfg.SideTravel, 0.57 + (if input.standing then cfg.StandingHeight else 0), 0.05 - input.bodyForward * cfg.ForeAftTravel)
+	local desired = (target - record.riderPosition) * 7
+	if desired.Magnitude > cfg.MoveRate then desired = desired.Unit * cfg.MoveRate end
+	record.riderVelocity = record.riderVelocity:Lerp(desired, 1 - math.exp(-dt * 12))
+	record.riderPosition += record.riderVelocity * dt
+	-- Positive bike lean articulates the rider left, generating an opposite
+	-- finite physical roll reaction. BodySide controls mass position separately.
+	local rollVelocity = math.clamp((-input.lean * cfg.MaxRoll - record.riderRoll) * 7, -cfg.MoveRate, cfg.MoveRate)
+	local pitchVelocity = math.clamp((-input.bodyForward * cfg.MaxPitch - record.riderPitch) * 7, -cfg.MoveRate, cfg.MoveRate)
+	record.riderRollVelocity += (rollVelocity - record.riderRollVelocity) * (1 - math.exp(-dt * 12))
+	record.riderPitchVelocity += (pitchVelocity - record.riderPitchVelocity) * (1 - math.exp(-dt * 12))
+	record.riderRoll += record.riderRollVelocity * dt; record.riderPitch += record.riderPitchVelocity * dt
+	-- Relative rider momentum has finite travel. Holding still in the air gives
+	-- zero torque; returning the body transfers the opposite angular impulse.
+	local momentum = record.riderPosition:Cross(record.riderVelocity) * record.cfg.RiderMass
+		+ Vector3.new(cfg.PitchInertia * record.riderPitchVelocity, 0, -cfg.RollInertia * record.riderRollVelocity)
+	local change = momentum - record.riderMomentum
+	local limit = cfg.MaxReactionTorque * dt
+	if change.Magnitude > limit then change = change.Unit * limit end
+	record.riderMomentum += change
+	applyAngular(record, -record.chassis.CFrame:VectorToWorldSpace(change))
+	record.riderJoint.C0 = CFrame.new(record.riderPosition / record.cfg.MetresPerStud) * CFrame.Angles(record.riderPitch, 0, -record.riderRoll)
+	for _, foot in record.feet do foot.CanCollide = input.footDown end
+end
+
+local function tyreForces(record: Record, sample: any, front: boolean, dt: number): any
+	local cfg = record.cfg
+	local susCfg = if front then cfg.Suspension.Front else cfg.Suspension.Rear
+	local susState = if front then record.frontSuspension else record.rearSuspension
+	local sus = Suspension.step(susState, sample.compression, sample.compressionVelocity, sample.hit ~= nil, dt, susCfg)
+	local omega = if front then record.frontOmega else record.drive.rearOmega
+	local state = if front then record.frontTire else record.rearTire
+	if not sample.hit then
+		return { suspension = sus, tyre = Tire.step(state, { normalLoad = 0, longitudinalVelocity = 0, lateralVelocity = 0,
+			wheelOmega = omega, radius = sample.radius, camber = 0, contact = false }, dt, cfg.Tire, sample.surface),
+			normalLoad = 0, lateralVelocity = 0, axialError = 0 }
+	end
+	local hit = sample.hit
+	local forward = unitOr(sample.wheelFrame.LookVector - hit.Normal * sample.wheelFrame.LookVector:Dot(hit.Normal), record.chassis.CFrame.LookVector)
+	local right = unitOr(forward:Cross(hit.Normal), record.chassis.CFrame.RightVector)
+	local roadVelocity = Vector3.zero
+	if hit.Instance:IsA("BasePart") then roadVelocity = hit.Instance:GetVelocityAtPosition(sample.point) end
+	local velocity = (record.chassis:GetVelocityAtPosition(sample.point) - roadVelocity) * cfg.MetresPerStud - sample.down * sample.compressionVelocity
+	local camber = math.atan2(sample.wheelFrame.UpVector:Dot(right), sample.wheelFrame.UpVector:Dot(hit.Normal))
+	local up = -sample.down
+	-- Tangential tyre force participates in axial spring equilibrium on a lean.
+	local contactResult = WheelContact.step(state, { normalLoad = 0, longitudinalVelocity = velocity:Dot(forward), lateralVelocity = velocity:Dot(right),
+		wheelOmega = omega, radius = sample.radius, camber = camber, contact = true }, dt, cfg.Tire, sample.surface,
+		sus.force, hit.Normal:Dot(up), forward:Dot(up), right:Dot(up), Tire)
+	local load, result = contactResult.normalLoad, contactResult.tyre
+	-- Independent contact forces create native roll, yaw and load-transfer pitch.
+	applyForce(record, hit.Normal * load + forward * result.longitudinalForce + right * result.lateralForce, sample.point, dt)
+	-- Rolling resistance supplies an external wheel contact couple; total rotor
+	-- momentum compensation later transfers its share to the native body.
+	applyAngular(record, -sample.wheelFrame.RightVector * result.rollingTorque * dt)
+	return { suspension = sus, tyre = result, normalLoad = load, lateralVelocity = velocity:Dot(right), axialError = contactResult.axialError }
+end
+
+local function advanceSteering(record: Record, input: any, front: any, roll: number, dt: number): (number, Vector3)
+	local cfg = record.cfg.Steering
+	local axis = unitOr(record.chassis.CFrame.UpVector * math.cos(cfg.Caster) - record.chassis.CFrame.LookVector * math.sin(cfg.Caster), record.chassis.CFrame.UpVector)
+	local internal = input.steer * cfg.InputTorque - record.steerRate * cfg.Damping
+	-- Trail aligning and caster wheel-flop use measured tyre force/load, never
+	-- target lean/heading. Damping is the steering bearing, not body stabilization.
+	local road = -cfg.Trail * front.tyre.lateralForce * math.cos(cfg.Caster)
+		+ front.normalLoad * cfg.Trail * math.sin(cfg.Caster) * math.sin(roll)
+	local oldRate = record.steerRate
+	record.steerRate += (internal + road) * dt / cfg.Inertia
+	record.steerAngle += record.steerRate * dt
+	if math.abs(record.steerAngle) > cfg.MaxAngle then
+		record.steerAngle = math.sign(record.steerAngle) * cfg.MaxAngle
+		if record.steerRate * record.steerAngle > 0 then record.steerRate = 0 end
+	end
+	-- Native contact force already carries road moments. The virtual steering
+	-- rotor has L=-axis*I*rate; transfer its complete change, including stops.
+	applyAngular(record, axis * (cfg.Inertia * (record.steerRate - oldRate)))
+	return (oldRate + record.steerRate) * 0.5, axis
+end
+
+local function crashBike(player: Player, record: Record, reason: string)
+	if record.crashed then return end
+	record.crashed = true; record.crashedAt = os.clock(); record.crashReason = reason
+	record.model:SetAttribute("Crashed", true); record.model:SetAttribute("CrashReason", reason)
+	record.input = idleInput(false, false); record.ballast.Massless = true
+	for _, foot in record.feet do foot.CanCollide = false end
+	-- Rider safety switch kills engine; native bike motion continues uncorrected.
+	record.drive.stalled = true -- retain crank momentum; friction spins it down
+	local humanoid = record.seat.Occupant
+	local root = if player.Character then player.Character:FindFirstChild("HumanoidRootPart") else nil
+	local velocity = if root and root:IsA("BasePart") then record.chassis:GetVelocityAtPosition(root.Position) else Vector3.zero
+	if humanoid then humanoid.Sit = false end
+	local seatJoint = record.seat:FindFirstChild("SeatWeld")
+	if seatJoint then seatJoint:Destroy() end
+	restoreCharacter(record)
+	if root and root:IsA("BasePart") then root.AssemblyLinearVelocity = velocity end
+	if humanoid then
+		humanoid.PlatformStand = true
+		task.delay(0.8, function() if humanoid.Parent and humanoid.Health > 0 then humanoid.PlatformStand = false end end)
+	end
+	if record.chassis:CanSetNetworkOwnership() then record.chassis:SetNetworkOwner(nil) end
+end
+
 function Bikes.new(world: Instance): Service
-	local folder = Instance.new("Folder")
-	folder.Name = "DirtBikes"
-	folder.Parent = world
-	return setmetatable({ _folder = folder, _bikes = {} }, Bikes) :: any
+	local folder = Instance.new("Folder"); folder.Name = "DirtBikes"; folder.Parent = world
+	return setmetatable({ _folder = folder, _bikes = {} }, Bikes)
 end
 
 function Bikes.spawn(self: Service, player: Player, spawnCFrame: CFrame): Model
 	self:remove(player)
 	local record = buildBike(player, spawnCFrame)
-	self._bikes[player] = record
-	record.model.Parent = self._folder
-	-- Keep both the bike and its seated rider under server physics authority.
-	record.chassis:SetNetworkOwner(nil)
-
+	self._bikes[player] = record; record.model.Parent = self._folder; record.chassis:SetNetworkOwner(nil)
 	local function seatCharacter(character: Model)
-		local function attempt(humanoid: Humanoid)
-			if self._bikes[player] ~= record or player.Character ~= character or humanoid.Health <= 0 then
-				return
-			end
-			character:PivotTo(record.seat.CFrame * CFrame.new(0, 3, 0))
-			record.seat:Sit(humanoid)
-			task.delay(0.2, function()
-				if self._bikes[player] == record and player.Character == character and humanoid.Health > 0 and record.seat.Occupant == nil then
-					record.seat:Sit(humanoid)
-				end
-			end)
-		end
 		local pending: RBXScriptConnection? = nil
 		local function whenReady(): boolean
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			local rootPart = character:FindFirstChild("HumanoidRootPart")
-			if humanoid and rootPart and rootPart:IsA("BasePart") then
-				if pending then pending:Disconnect() end
-				attempt(humanoid)
-				return true
-			end
-			return false
+			local root = character:FindFirstChild("HumanoidRootPart")
+			if not humanoid or not root or not root:IsA("BasePart") then return false end
+			if pending then pending:Disconnect() end
+			if self._bikes[player] ~= record or record.crashed or player.Character ~= character or humanoid.Health <= 0 then return true end
+			makeCharacterMassless(record, character); character:PivotTo(record.seat.CFrame * CFrame.new(0, 2, 0)); record.seat:Sit(humanoid)
+			task.delay(0.2, function()
+				if self._bikes[player] == record and not record.crashed and player.Character == character and humanoid.Health > 0 and not record.seat.Occupant then record.seat:Sit(humanoid) end
+			end)
+			return true
 		end
 		if whenReady() then return end
-		pending = character.ChildAdded:Connect(function()
-			whenReady()
-		end)
-		table.insert(record.connections, pending :: RBXScriptConnection)
-		task.delay(8, function()
-			if pending then pending:Disconnect() end
-		end)
+		pending = character.ChildAdded:Connect(whenReady); table.insert(record.connections, pending :: RBXScriptConnection)
+		task.delay(8, function() if pending then pending:Disconnect() end end)
 	end
-
 	table.insert(record.connections, player.CharacterAdded:Connect(seatCharacter))
 	table.insert(record.connections, record.seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		local occupant = record.seat.Occupant
-		if occupant and occupant.Parent ~= player.Character then
-			occupant.Sit = false
-		end
-		-- Seating changes the assembly; reaffirm server authority for it.
-		if record.chassis:IsDescendantOf(workspace) and record.chassis:CanSetNetworkOwnership() then
-			record.chassis:SetNetworkOwner(nil)
-		end
-		record.throttle = 0
-		record.steer = 0
-		record.brake = true
+		if occupant and occupant.Parent ~= player.Character then occupant.Sit = false end
+		if not occupant then restoreCharacter(record) end
+		if record.chassis:IsDescendantOf(workspace) and record.chassis:CanSetNetworkOwnership() then record.chassis:SetNetworkOwner(nil) end
 		record.lastInput = -math.huge
+		record.seatJoint = nil; record.seatJointBase = nil
 	end))
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "RidePrompt"
-	prompt.ActionText = "Ride"
-	prompt.ObjectText = "Dirtline 250"
-	prompt.KeyboardKeyCode = Enum.KeyCode.E
-	prompt.MaxActivationDistance = 9
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = record.seat
-	table.insert(record.connections, prompt.Triggered:Connect(function(triggeringPlayer)
-		if triggeringPlayer == player and not riding(player, record) and player.Character then
-			seatCharacter(player.Character)
-		end
-	end))
-	if player.Character then
-		task.defer(seatCharacter, player.Character)
+	local function bodyContact(other: BasePart)
+		if other:IsDescendantOf(record.model) or (player.Character and other:IsDescendantOf(player.Character)) then return end
+		if other.CanCollide then record.bodyContactAt = os.clock() end
 	end
+	table.insert(record.connections, record.chassis.Touched:Connect(bodyContact))
+	for _, guard in record.guards do table.insert(record.connections, guard.Touched:Connect(bodyContact)) end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Mount 250F"; prompt.ObjectText = "Manual simulation"; prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.MaxActivationDistance = 9; prompt.RequiresLineOfSight = false; prompt.Parent = record.seat
+	table.insert(record.connections, prompt.Triggered:Connect(function(triggeringPlayer)
+		if triggeringPlayer == player and not record.crashed and not riding(player, record) and player.Character then seatCharacter(player.Character) end
+	end))
+	if player.Character then task.defer(seatCharacter, player.Character) end
 	return record.model
 end
 
@@ -505,133 +1344,645 @@ function Bikes.remove(self: Service, player: Player)
 	self._bikes[player] = nil
 	for _, connection in record.connections do connection:Disconnect() end
 	if record.seat.Occupant then record.seat.Occupant.Sit = false end
-	record.model:Destroy()
+	restoreCharacter(record); record.model:Destroy()
 end
 
-function Bikes.input(self: Service, player: Player, throttle: number, steer: number, brake: boolean)
+function Bikes.input(self: Service, player: Player, packet: any)
 	local record = self._bikes[player]
 	if not record or not riding(player, record) then return end
-	-- Remote arguments still need runtime validation despite the Luau signature.
-	if typeof(throttle) ~= "number" or typeof(steer) ~= "number" or typeof(brake) ~= "boolean" then return end
-	if not finite(throttle) or not finite(steer) then return end
 	local now = os.clock()
 	if now - record.lastAcceptedInput < 1 / 120 then return end
-	record.lastAcceptedInput = now
-	record.lastInput = now
-	record.throttle = math.clamp(throttle, -1, 1)
-	record.steer = math.clamp(steer, -1, 1)
-	record.brake = brake
+	local normalized = Controls.normalize(packet, record.lastSeq)
+	if not normalized then return end
+	record.lastAcceptedInput = now; record.lastInput = now; record.lastSeq = normalized.seq; record.input = normalized
+	if normalized.shift ~= 0 then Drivetrain.shift(record.drive, normalized.shift, normalized, record.cfg.Drive) end
+end
+function Bikes.restart(self: Service, player: Player): boolean
+	local record = self._bikes[player]
+	return record ~= nil and riding(player, record) and Drivetrain.start(record.drive, record.input, record.cfg.Drive)
+end
+function Bikes.tune(self: Service, player: Player, changes: any): boolean
+	local record = self._bikes[player]
+	if not record or not riding(player, record) or not record.grounded or not record.input.footDown
+		or record.chassis.AssemblyLinearVelocity.Magnitude * record.cfg.MetresPerStud >= 1 then return false end
+	local setup = Controls.normalizeSetup(changes, record.cfg.Suspension)
+	if not setup then return false end
+	record.cfg.Suspension = setup; record.setupVersion += 1; record.model:SetAttribute("SetupVersion", record.setupVersion)
+	return true
 end
 
 function Bikes.update(self: Service, frameDt: number)
-	if not finite(frameDt) or frameDt <= 0 then return end
-	-- Limit steering integration after a server stall, while avoiding a force
-	-- impulse from dividing by a nearly zero timestep.
-	local dt = math.clamp(frameDt, 1 / 240, 1 / 20)
+	if typeof(frameDt) ~= "number" or not finite(frameDt) or frameDt <= 0 then return end
 	local now = os.clock()
 	local exclusions: { Instance } = { self._folder }
-	for _, otherPlayer in Players:GetPlayers() do
-		if otherPlayer.Character then table.insert(exclusions, otherPlayer.Character) end
-	end
+	for _, player in Players:GetPlayers() do if player.Character then table.insert(exclusions, player.Character) end end
 	for player, record in self._bikes do
-		local chassis = record.chassis
-		if not chassis.Parent then continue end
+		if not record.chassis.Parent then continue end
+		local cfg = record.cfg
 		record.raycast.FilterDescendantsInstances = exclusions
-		local grounded = false
-		local normalSum = Vector3.zero
-		for _, z in { -WHEEL_BASE, WHEEL_BASE } do
-			local center = chassis.CFrame:PointToWorldSpace(Vector3.new(0, WHEEL_HEIGHT, z))
-			local hit = workspace:Raycast(center + Vector3.yAxis * 3, -Vector3.yAxis * 5.2, record.raycast)
-			if hit and center.Y - hit.Position.Y <= WHEEL_RADIUS + 0.42 and center.Y - hit.Position.Y >= -0.2 and hit.Normal.Y > 0.35 then
-				grounded = true
-				normalSum += hit.Normal
+		local budget = StepBudget.plan(frameDt, cfg.FixedStep, cfg.MaxSubsteps)
+		local steps = budget.steps
+		-- Preserve the whole native interval: gravity advances this duration too.
+		-- Over-budget frames use coarser contact steps and invalidate timed lab runs.
+		if budget.overrun then record.budgetOverrunCount += 1 end
+		record.maxFrameDt = math.max(record.maxFrameDt, frameDt)
+		local frontSample = contact(record, true, frameDt)
+		local rearSample = contact(record, false, frameDt)
+		local grounded = frontSample.hit ~= nil or rearSample.hit ~= nil
+		local normal = Vector3.yAxis
+		if grounded then normal = unitOr((if frontSample.hit then frontSample.hit.Normal else Vector3.zero) + (if rearSample.hit then rearSample.hit.Normal else Vector3.zero), Vector3.yAxis) end
+		local roll, pitch = pose(record, normal) -- ground-relative on berms
+		local landing = grounded and not record.grounded and record.airborneFor >= 0.08
+		local impact = 0
+		if landing then
+			for _, sample in { frontSample, rearSample } do
+				if sample.hit then impact = math.max(impact, -record.chassis:GetVelocityAtPosition(sample.point):Dot(sample.hit.Normal) * cfg.MetresPerStud) end
 			end
 		end
-		local targetNormal = if grounded then unitOr(normalSum, Vector3.yAxis) else Vector3.yAxis
-		local blend = 1 - math.exp(-dt * (if grounded then 12 else 2.8))
-		record.normal = unitOr(record.normal:Lerp(targetNormal, blend), Vector3.yAxis)
-
+		record.airborneFor = if grounded then 0 else record.airborneFor + budget.duration
 		local active = riding(player, record) and now - record.lastInput <= INPUT_TIMEOUT
-		local throttle = if active then record.throttle else 0
-		local steer = if active then record.steer else 0
-		local braking = not active or record.brake
-		local velocity = chassis.AssemblyLinearVelocity
-		local horizontalHeading = Vector3.new(-math.sin(record.yaw), 0, -math.cos(record.yaw))
-		local forward = unitOr(horizontalHeading - record.normal * horizontalHeading:Dot(record.normal), horizontalHeading)
-		local speed = velocity:Dot(forward)
-		local speedFraction = math.clamp(math.abs(speed) / TOP_SPEED, 0, 1)
-		local movementSign = if speed < -1 then -1 else 1
-		local turnRate = math.rad(125) * (1 - 0.3 * speedFraction) * math.clamp(math.abs(speed) / 10, 0, 1)
-		record.yaw -= steer * movementSign * turnRate * dt * (if grounded then 1 else 0.25)
-		horizontalHeading = Vector3.new(-math.sin(record.yaw), 0, -math.cos(record.yaw))
-		forward = unitOr(horizontalHeading - record.normal * horizontalHeading:Dot(record.normal), horizontalHeading)
-		local lean = -steer * movementSign * math.rad(14) * speedFraction * (if grounded then 1 else 0.3)
-		record.balance.CFrame = CFrame.lookAt(Vector3.zero, forward, record.normal) * CFrame.Angles(0, 0, lean)
-
-		if grounded then
-			local acceleration: number
-			if braking then
-				acceleration = -math.sign(speed) * math.min(BRAKE_ACCELERATION, math.abs(speed) / dt)
-			elseif math.abs(throttle) > 0.01 then
-				local targetSpeed = throttle * (if throttle > 0 then TOP_SPEED else REVERSE_SPEED)
-				local limit = if throttle * speed < -3 then BRAKE_ACCELERATION * 0.75 else ENGINE_ACCELERATION
-				acceleration = math.clamp((targetSpeed - speed) * 3, -limit, limit)
-			else
-				acceleration = -speed * 0.65
+		-- Disconnect releases throttle/clutch/brakes; commanded feet/posture remain.
+		-- It adds no balancing force and no automatic foot planting.
+		local input = if active then record.input else idleInput(not record.crashed and record.input.footDown, record.input.standing)
+		local front, rear, driveResult
+		for _ = 1, steps do
+			local dt = budget.dt
+			local steeringAxisLocal = Vector3.yAxis * math.cos(cfg.Steering.Caster) + Vector3.zAxis * math.sin(cfg.Steering.Caster)
+			frontSample.wheelFrame = record.chassis.CFrame * CFrame.fromAxisAngle(steeringAxisLocal, -record.steerAngle)
+			advanceRider(record, input, dt)
+			front = tyreForces(record, frontSample, true, dt)
+			rear = tyreForces(record, rearSample, false, dt)
+			driveResult = Drivetrain.step(record.drive, input, rear.tyre.contactTorque, dt, cfg.Drive)
+			local oldFrontOmega = record.frontOmega
+			local candidate = oldFrontOmega + front.tyre.contactTorque * dt / cfg.FrontInertia
+			record.frontOmega = math.sign(candidate) * math.max(0, math.abs(candidate) - input.frontBrake * cfg.Drive.FrontBrakeTorque * dt / cfg.FrontInertia)
+			-- Ground-point forces include external torque. Massless visual rotors do
+			-- not carry native momentum, so transfer opposite TOTAL spin change to
+			-- the chassis, including tyre torque, to avoid double-counting traction.
+			applyAngular(record, frontSample.wheelFrame.RightVector * ((record.frontOmega - oldFrontOmega) * cfg.FrontInertia))
+			applyAngular(record, record.chassis.CFrame.RightVector * ((driveResult.engineReaction + rear.tyre.contactTorque) * dt))
+			local steeringRate, steeringAxis = advanceSteering(record, input, front, roll, dt)
+			local frontMomentum = -frontSample.wheelFrame.RightVector * (cfg.FrontInertia * record.frontOmega)
+			local rotorMomentum = frontMomentum - record.chassis.CFrame.RightVector * (cfg.RearInertia * record.drive.rearOmega + cfg.Drive.EngineInertia * record.drive.engineOmega)
+				- steeringAxis * (cfg.Steering.Inertia * record.steerRate)
+			local gyroTorque = -record.chassis.AssemblyAngularVelocity:Cross(rotorMomentum) + steeringAxis:Cross(frontMomentum) * steeringRate
+			applyAngular(record, gyroTorque * dt)
+			local velocity = record.chassis.AssemblyLinearVelocity * cfg.MetresPerStud
+			applyForce(record, -velocity * velocity.Magnitude * 0.42, record.chassis.CFrame:PointToWorldSpace(Vector3.new(0, 0.30 / cfg.MetresPerStud, 0)), dt)
+			local omega = record.chassis.AssemblyAngularVelocity
+			applyAngular(record, -omega * omega.Magnitude * 0.045 * dt) -- small physical air drag
+			record.frontAngle = (record.frontAngle - record.frontOmega * dt) % (2 * math.pi)
+			record.rearAngle = (record.rearAngle - record.drive.rearOmega * dt) % (2 * math.pi)
+		end
+		local function wheelOffset(sample: any, angle: number, frontWheel: boolean): CFrame
+			local sus = if frontWheel then cfg.Suspension.Front else cfg.Suspension.Rear
+			local point = sample.anchorLocal + sample.downLocal * (sus.RestLength - math.clamp(sample.compression, 0, sus.Travel))
+			local axis = Vector3.yAxis * math.cos(cfg.Steering.Caster) + Vector3.zAxis * math.sin(cfg.Steering.Caster)
+			return CFrame.new(point / cfg.MetresPerStud) * (if frontWheel then CFrame.fromAxisAngle(axis, -record.steerAngle) else CFrame.identity) * CFrame.Angles(angle, 0, 0)
+		end
+		record.frontWheel.C0 = wheelOffset(frontSample, record.frontAngle, true)
+		record.rearWheel.C0 = wheelOffset(rearSample, record.rearAngle, false)
+		-- Presentation follows actual travel. These parts are massless and cannot
+		-- collide, steer, propel, stabilize or otherwise drive the rigid body.
+		local frontAxle = record.frontWheel.C0.Position * cfg.MetresPerStud
+		local rearAxle = record.rearWheel.C0.Position * cfg.MetresPerStud
+		local frontTop = frontSample.anchorLocal - frontSample.downLocal * 0.38
+		for index, side in { -1, 1 } do
+			updateLink(record.links.forks[index], frontTop + Vector3.xAxis * side * 0.064, frontAxle + Vector3.xAxis * side * 0.064, 0.042, cfg.MetresPerStud)
+			updateLink(record.links.swingarms[index], Vector3.new(side * 0.075, -0.16, 0.20), rearAxle + Vector3.xAxis * side * 0.075, 0.045, cfg.MetresPerStud)
+		end
+		updateLink(record.links.shock, Vector3.new(0, 0.23, 0.15), Vector3.new(0, -0.16, 0.20):Lerp(rearAxle, 0.5), 0.060, cfg.MetresPerStud)
+		local speed = record.chassis.AssemblyLinearVelocity.Magnitude * cfg.MetresPerStud
+		local sample = { roll = roll, pitch = pitch, grounded = grounded, landing = landing, landingRoll = roll, landingPitch = pitch,
+			normalImpactSpeed = impact, sideLandingSpeed = math.max(math.abs(front.lateralVelocity), math.abs(rear.lateralVelocity)),
+			speed = speed, frontSliding = front.tyre.sliding, rearSliding = rear.tyre.sliding,
+			frontUtilization = front.tyre.utilization, rearUtilization = rear.tyre.utilization,
+			rearSlipAngle = rear.tyre.slipAngle, rearWasSliding = record.previousRearSliding,
+			rearGripRecovered = record.previousRearSliding and not rear.tyre.sliding,
+			rollRate = record.chassis.AssemblyAngularVelocity:Dot(record.chassis.CFrame.LookVector),
+			frontContact = frontSample.hit ~= nil, rearContact = rearSample.hit ~= nil, bodyContact = now - record.bodyContactAt <= 0.12 }
+		if riding(player, record) then local reason = Crash.evaluate(sample, cfg.Crash); if reason then crashBike(player, record, reason) end end
+		record.previousRearSliding = rear.tyre.sliding; record.grounded = grounded
+		record.poseElapsed += frameDt
+		if record.character and not record.crashed and record.poseElapsed >= 1 / 15 then
+			record.poseElapsed %= 1 / 15
+			local seatJoint = record.seat:FindFirstChild("SeatWeld")
+			if seatJoint and seatJoint:IsA("Weld") then
+				if record.seatJoint ~= seatJoint then record.seatJoint = seatJoint; record.seatJointBase = seatJoint.C0 end
+				local delta = record.riderPosition - Vector3.new(0, 0.57, 0.05)
+				seatJoint.C0 = CFrame.new(delta / cfg.MetresPerStud) * record.seatJointBase
 			end
-			local right = unitOr(forward:Cross(record.normal), chassis.CFrame.RightVector)
-			local lateralAcceleration = -velocity:Dot(right) * 9
-			record.force.Force = (forward * acceleration + right * lateralAcceleration) * chassis.AssemblyMass
-		else
-			-- Ballistic airtime: the engine never cancels vertical launch velocity.
-			record.force.Force = Vector3.zero
+			local attributes = { MotocrossRiding = true, MotocrossStanding = input.standing, MotocrossBodyForward = input.bodyForward,
+				MotocrossBodySide = input.bodySide, MotocrossLean = record.riderRoll / cfg.Rider.MaxRoll }
+			for name, value in attributes do if record.character:GetAttribute(name) ~= value then record.character:SetAttribute(name, value) end end
 		end
-
-		-- A collision or a steep descent can exceed engine speed. This generous
-		-- safety cap affects horizontal travel only, preserving jump/fall velocity.
-		local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
-		if horizontalVelocity.Magnitude > TOP_SPEED * 1.6 then
-			local limited = horizontalVelocity.Unit * TOP_SPEED * 1.6
-			chassis.AssemblyLinearVelocity = Vector3.new(limited.X, velocity.Y, limited.Z)
-		end
-		record.wheelAngle = (record.wheelAngle - speed * dt / WHEEL_RADIUS) % (2 * math.pi)
-		record.wheelElapsed += frameDt
-		if record.wheelElapsed >= 1 / 20 then
-			record.wheelElapsed = 0
-			for index, motor in record.wheels do
-				motor.C0 = record.wheelOffsets[index] * CFrame.Angles(record.wheelAngle, 0, 0)
-			end
-		end
+		record.telemetry = { rpm = driveResult.rpm, gear = driveResult.gear, stalled = driveResult.stalled,
+			clutch = input.clutch, throttle = input.throttle, frontBrake = input.frontBrake, rearBrake = input.rearBrake,
+			frontCompression = front.suspension.compression, rearCompression = rear.suspension.compression,
+			frontBottomed = front.suspension.bottomed, rearBottomed = rear.suspension.bottomed,
+			frontSlip = front.tyre.slipRatio, rearSlip = rear.tyre.slipRatio, frontSlipAngle = front.tyre.slipAngle, rearSlipAngle = rear.tyre.slipAngle,
+			frontGrip = front.tyre.grip, rearGrip = rear.tyre.grip, frontLoad = front.normalLoad, rearLoad = rear.normalLoad,
+			frontSliding = front.tyre.sliding, rearSliding = rear.tyre.sliding, roll = roll, pitch = pitch, steerAngle = record.steerAngle,
+			grounded = grounded, frontContact = sample.frontContact, rearContact = sample.rearContact,
+			surfaceFront = frontSample.surfaceName, surfaceRear = rearSample.surfaceName,
+			frontCompressionVelocity = frontSample.compressionVelocity, rearCompressionVelocity = rearSample.compressionVelocity,
+			frontAxialError = front.axialError, rearAxialError = rear.axialError, clutchSlip = driveResult.clutchSlip,
+			rollRate = sample.rollRate, pitchRate = record.chassis.AssemblyAngularVelocity:Dot(record.chassis.CFrame.RightVector),
+			crashed = record.crashed, crashReason = record.crashReason, standing = input.standing, footDown = input.footDown,
+			setupVersion = record.setupVersion, physicsVersion = cfg.Version, assists = false, substeps = steps,
+			budgetOverrun = budget.overrun, budgetOverrunCount = record.budgetOverrunCount, maxFrameDt = record.maxFrameDt,
+			power = driveResult.power, frontOmega = record.frontOmega, rearOmega = record.drive.rearOmega,
+			landing = landing, impact = impact }
 	end
 end
 
 function Bikes.getBike(self: Service, player: Player): Model?
-	local record = self._bikes[player]
-	return if record then record.model else nil
+	local record = self._bikes[player]; return if record then record.model else nil
 end
-
 function Bikes.getSpeed(self: Service, player: Player): number
 	local record = self._bikes[player]
-	if not record then return 0 end
-	local velocity = record.chassis.AssemblyLinearVelocity
-	return Vector3.new(velocity.X, 0, velocity.Z).Magnitude * STUDS_TO_KMH
+	return if record then record.chassis.AssemblyLinearVelocity.Magnitude * record.cfg.MetresPerStud * 3.6 else 0
 end
-
 function Bikes.getPosition(self: Service, player: Player): Vector3?
-	local record = self._bikes[player]
-	return if record then record.chassis.Position else nil
+	local record = self._bikes[player]; return if record then record.chassis.Position else nil
 end
-
 function Bikes.isRiding(self: Service, player: Player): boolean
+	local record = self._bikes[player]; return record ~= nil and riding(player, record)
+end
+function Bikes.getTelemetry(self: Service, player: Player): any
 	local record = self._bikes[player]
-	return record ~= nil and riding(player, record)
+	if not record then return {} end
+	local result = table.clone(record.telemetry)
+	result.recoveryRemaining = if record.crashed then math.max(0, record.cfg.Crash.RecoveryDelay - (os.clock() - record.crashedAt)) else 0
+	return result
 end
 
 return Bikes
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="8">
+      <Item class="ModuleScript" referent="17">
+        <Properties>
+          <string name="Name">TestTrack</string>
+          <string name="Source"><![CDATA[--!strict
+-- A development proving ground, not a finished race venue. Every measurement
+-- below is in metres; only this builder converts to Roblox studs (0.28 m/stud).
+-- Surface geometry is collision geometry. Labels and reference lines never
+-- participate in wheel raycasts or change the motorcycle's balance.
+
+local TestTrack = {}
+
+export type Gate = { cframe: CFrame, width: number }
+export type Station = {
+	id: string,
+	title: string,
+	difficulty: string,
+	surface: string,
+	frame: CFrame,
+	lengthM: number,
+	widthM: number,
+	notes: string,
+}
+export type Course = {
+	gates: { Gate },
+	checkpointCount: number,
+	stations: { Station },
+	spawnCFrame: (self: Course, slot: number) -> CFrame,
+}
+
+local METRES_PER_STUD = 0.28
+local ROAD_Y = 1
+local ROAD_WIDTH_M = 10
+local ROAD_EPSILON_M = 0.002
+local WHITE = Color3.fromRGB(245, 242, 229)
+local ORANGE = Color3.fromRGB(246, 132, 54)
+local TEAL = Color3.fromRGB(43, 196, 178)
+local INK = Color3.fromRGB(30, 39, 43)
+
+local SURFACES: { [string]: { color: Color3, material: Enum.Material } } = {
+	dirt = { color = Color3.fromRGB(146, 102, 65), material = Enum.Material.Ground },
+	loam = { color = Color3.fromRGB(118, 83, 54), material = Enum.Material.Ground },
+	sand = { color = Color3.fromRGB(203, 180, 131), material = Enum.Material.Sand },
+	mud = { color = Color3.fromRGB(83, 64, 49), material = Enum.Material.Mud },
+	hardpack = { color = Color3.fromRGB(175, 141, 104), material = Enum.Material.Sandstone },
+	grass = { color = Color3.fromRGB(103, 121, 78), material = Enum.Material.Grass },
+	concrete = { color = Color3.fromRGB(157, 156, 149), material = Enum.Material.Concrete },
+}
+
+local function m(value: number): number
+	return value / METRES_PER_STUD
+end
+
+local function position(x: number, height: number, z: number): Vector3
+	return Vector3.new(m(x), ROAD_Y + m(height), m(z))
+end
+
+local function folder(parent: Instance, name: string): Folder
+	local result = Instance.new("Folder")
+	result.Name = name
+	result.Parent = parent
+	return result
+end
+
+local function block(
+	parent: Instance,
+	name: string,
+	size: Vector3,
+	frame: CFrame,
+	color: Color3,
+	material: Enum.Material,
+	collision: boolean
+): Part
+	local result = Instance.new("Part")
+	result.Name = name
+	result.Anchored = true
+	result.Size = size
+	result.CFrame = frame
+	result.Color = color
+	result.Material = material
+	result.CanCollide = collision
+	-- Body/guard impact detection uses Touched. Both the chassis and its
+	-- collision surface must permit events; visual guides remain inert.
+	result.CanTouch = collision
+	result.CanQuery = collision
+	result.TopSurface = Enum.SurfaceType.Smooth
+	result.BottomSurface = Enum.SurfaceType.Smooth
+	result.Parent = parent
+	return result
+end
+
+local function collisionSurface(result: BasePart, surface: string)
+	result:SetAttribute("PhysicsSurface", surface)
+	-- Native collision friction concerns the chassis/feet. Tire grip itself is
+	-- evaluated by the simulation, independently for each raycast contact.
+	result.CustomPhysicalProperties = PhysicalProperties.new(1, 0.5, 0, 1, 1)
+end
+
+-- from/to describe TOP centreline points. Moving half the thickness along the
+-- normal keeps slopes flush at their endpoints, including banked surfaces.
+local function span(
+	parent: Instance,
+	name: string,
+	from: Vector3,
+	to: Vector3,
+	widthM: number,
+	surface: string,
+	roll: number?
+): Part
+	local visual = SURFACES[surface] or SURFACES.dirt
+	local thickness = m(0.2)
+	local angle = roll or 0
+	local frame = CFrame.lookAt((from + to) / 2, to) * CFrame.Angles(0, 0, angle)
+	local result = block(parent, name,
+		Vector3.new(m(widthM) / math.cos(angle), thickness, (to - from).Magnitude + m(0.006)),
+		frame * CFrame.new(0, -thickness / 2, 0), visual.color, visual.material, true)
+	collisionSurface(result, surface)
+	return result
+end
+
+local function flat(parent: Instance, name: string, x: number, z: number, widthM: number, lengthM: number, surface: string): Part
+	return span(parent, name,
+		position(x, ROAD_EPSILON_M, z - lengthM / 2),
+		position(x, ROAD_EPSILON_M, z + lengthM / 2), widthM, surface)
+end
+
+local function label(board: BasePart, face: Enum.NormalId, title: string, detail: string)
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "StationLabel"
+	gui.Face = face
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 28
+	gui.LightInfluence = 0.1
+	gui.Parent = board
+	local heading = Instance.new("TextLabel")
+	heading.Size = UDim2.fromScale(0.94, 0.36)
+	heading.Position = UDim2.fromScale(0.03, 0.03)
+	heading.BackgroundTransparency = 1
+	heading.Font = Enum.Font.GothamBold
+	heading.Text = title
+	heading.TextColor3 = WHITE
+	heading.TextScaled = true
+	heading.Parent = gui
+	local description = Instance.new("TextLabel")
+	description.Size = UDim2.fromScale(0.94, 0.54)
+	description.Position = UDim2.fromScale(0.03, 0.43)
+	description.BackgroundTransparency = 1
+	description.Font = Enum.Font.Gotham
+	description.Text = detail
+	description.TextWrapped = true
+	description.TextScaled = true
+	description.TextColor3 = TEAL
+	description.Parent = gui
+end
+
+local function sign(parent: Instance, name: string, frame: CFrame, title: string, detail: string)
+	-- Practice signs are intentionally outside the riding lane and noncolliding.
+	block(parent, name .. "Post", Vector3.new(m(0.1), m(2), m(0.1)),
+		frame * CFrame.new(0, m(1), 0), INK, Enum.Material.Metal, false)
+	local board = block(parent, name, Vector3.new(m(4.8), m(1.7), m(0.08)),
+		frame * CFrame.new(0, m(2.4), 0), INK, Enum.Material.SmoothPlastic, false)
+	label(board, Enum.NormalId.Front, title, detail)
+	label(board, Enum.NormalId.Back, title, detail)
+end
+
+local function referenceLine(parent: Instance, name: string, frame: CFrame, widthM: number, color: Color3)
+	block(parent, name, Vector3.new(m(widthM), m(0.004), m(0.055)),
+		frame * CFrame.new(0, m(0.009), 0), color, Enum.Material.SmoothPlastic, false)
+end
+
+local function station(
+	stations: { Station }, parent: Instance, id: string, title: string,
+	difficulty: string, surface: string, frame: CFrame, lengthM: number,
+	widthM: number, notes: string
+)
+	table.insert(stations, {
+		id = id, title = title, difficulty = difficulty, surface = surface,
+		frame = frame, lengthM = lengthM, widthM = widthM, notes = notes,
+	})
+	sign(parent, id .. "Sign", frame * CFrame.new(-m(widthM / 2 + 2.8), 0, 0),
+		title .. " | " .. difficulty, notes)
+end
+
+local function profile(
+	parent: Instance, name: string, origin: Vector3, forward: Vector3,
+	lengthM: number, widthM: number, surface: string,
+	height: (distanceM: number) -> number, stepM: number?
+)
+	local count = math.ceil(lengthM / (stepM or 0.25))
+	for index = 1, count do
+		local a = (index - 1) / count * lengthM
+		local b = index / count * lengthM
+		span(parent, name .. string.format("%03d", index),
+			origin + forward * m(a) + Vector3.yAxis * m(height(a)),
+			origin + forward * m(b) + Vector3.yAxis * m(height(b)), widthM, surface)
+	end
+end
+
+local function curvedRoad(parent: Instance, name: string, centreX: number, centreZ: number, fromAngle: number, banked: boolean)
+	local radiusM = 10
+	local segments = 32
+	local function point(t: number): Vector3
+		local angle = fromAngle + t * math.pi / 2
+		return position(centreX + math.cos(angle) * radiusM, ROAD_EPSILON_M,
+			centreZ + math.sin(angle) * radiusM)
+	end
+	local function bank(t: number): number
+		-- 0 degree seams, rising smoothly to 16 degrees at mid-corner.
+		return if banked then math.rad(16) * math.sin(t * math.pi) ^ 2 else 0
+	end
+	for index = 1, segments do
+		local ta, tb = (index - 1) / segments, index / segments
+		local a, b = point(ta), point(tb)
+		local frame = CFrame.lookAt((a + b) / 2, b)
+		if banked then
+			local quarterWidth = ROAD_WIDTH_M / 4
+			local offset = frame.RightVector * m(quarterWidth)
+			span(parent, name .. "Inner" .. index, a + offset, b + offset, ROAD_WIDTH_M / 2, "loam")
+			-- The outside half rises away from the flat inner half. There is no
+			-- upright retaining curb or invisible force keeping the bike in it.
+			local outerA = a - offset + Vector3.yAxis * m(quarterWidth * math.tan(bank(ta)))
+			local outerB = b - offset + Vector3.yAxis * m(quarterWidth * math.tan(bank(tb)))
+			span(parent, name .. "Berm" .. index, outerA, outerB,
+				ROAD_WIDTH_M / 2, "loam", -(bank(ta) + bank(tb)) / 2)
+		else
+			span(parent, name .. index, a, b, ROAD_WIDTH_M, "dirt")
+		end
+	end
+end
+
+local function rutSection(parent: Instance, origin: Vector3, forward: Vector3)
+	local right = forward:Cross(Vector3.yAxis)
+	local distances = { 0, 0.5, 1, 1.5, 2, 14, 14.5, 15, 15.5, 16 }
+	local function envelope(distance: number): number
+		local fade = math.min(distance / 2, (16 - distance) / 2, 1)
+		return math.sin(math.clamp(fade, 0, 1) * math.pi / 2) ^ 2
+	end
+	local function ridge(offset: number): number
+		return 0.16 * math.cos(offset / 0.7 * math.pi / 2) ^ 2
+	end
+	-- Four 0.6 m channels lie between five rounded earth ridges. Their floors
+	-- remain at road level; raised banks create real 0.16 m depressions. Every
+	-- ridge tapers into the flat road over 2 m at both ends.
+	for _, ridgeX in { -4, -2, 0, 2, 4 } do
+		for band = 1, 7 do
+			local x0, x1 = -0.7 + (band - 1) * 0.2, -0.7 + band * 0.2
+			local midX = (x0 + x1) / 2
+			for segment = 2, #distances do
+				local a, b = distances[segment - 1], distances[segment]
+				local ea, eb = envelope(a), envelope(b)
+				local centreHeight = (ridge(x0) + ridge(x1)) / 2
+				local roll = math.atan((ridge(x1) - ridge(x0)) * (ea + eb) / 2 / 0.2)
+				local offset = right * m(ridgeX + midX)
+				span(parent, "RutBank", origin + forward * m(a) + offset + Vector3.yAxis * m(centreHeight * ea),
+					origin + forward * m(b) + offset + Vector3.yAxis * m(centreHeight * eb), 0.2, "loam", roll)
+			end
+		end
+	end
+end
+
+local function tabletop(
+	parent: Instance, name: string, origin: Vector3, forward: Vector3,
+	heightM: number, riseM: number, crestM: number, landingM: number, widthM: number
+)
+	local jump = folder(parent, name)
+	profile(jump, "Takeoff", origin, forward, riseM, widthM, "dirt", function(distance)
+		return heightM * (distance / riseM) ^ 2
+	end)
+	local crest = origin + forward * m(riseM) + Vector3.yAxis * m(heightM)
+	span(jump, "Table", crest, crest + forward * m(crestM), widthM, "dirt")
+	local landingOrigin = origin + forward * m(riseM + crestM)
+	profile(jump, "Landing", landingOrigin, forward, landingM, widthM, "dirt", function(distance)
+		return heightM * (1 - distance / landingM) ^ 2
+	end)
+	local endPoint = landingOrigin + forward * m(landingM)
+	referenceLine(jump, "TakeoffDatum", CFrame.lookAt(origin, origin + forward), widthM, ORANGE)
+	referenceLine(jump, "LandingEndDatum", CFrame.lookAt(endPoint, endPoint + forward), widthM, TEAL)
+	-- Reference pitch lines next to the landing are measurement guides only.
+	local right = forward:Cross(Vector3.yAxis)
+	local guide = endPoint + right * m(widthM / 2 + 1.2)
+	for _, degrees in { -30, 0, 30 } do
+		local angle = math.rad(degrees)
+		local target = guide + forward * m(1.6) * math.cos(angle) + Vector3.yAxis * m(1.6) * math.sin(angle)
+		local frame = CFrame.lookAt((guide + target) / 2 + Vector3.yAxis * m(1.5), target + Vector3.yAxis * m(1.5))
+		block(jump, "PitchReference" .. degrees, Vector3.new(m(0.055), m(0.055), (target - guide).Magnitude), frame,
+			if degrees == 0 then WHITE else ORANGE, Enum.Material.SmoothPlastic, false)
+	end
+	sign(jump, "PitchGuide", CFrame.lookAt(guide + right * m(1.2), guide), "LANDING PITCH DATUM", "Lines: -30 / 0 / +30 degrees. Diagnostic guides, not safe-angle guarantees.")
+end
+
+local function gate(parent: Instance, frame: CFrame, index: number)
+	local model = folder(parent, if index == 1 then "DevelopmentStartFinish" else "TestGate" .. index)
+	for _, side in { -1, 1 } do
+		block(model, "GatePost", Vector3.new(m(0.12), m(3), m(0.12)),
+			frame * CFrame.new(side * m(ROAD_WIDTH_M / 2 + 0.7), m(1.5), 0),
+			if side < 0 then ORANGE else TEAL, Enum.Material.SmoothPlastic, false)
+	end
+	local board = block(model, "GateLabel", Vector3.new(m(ROAD_WIDTH_M + 1.8), m(1), m(0.06)),
+		frame * CFrame.new(0, m(3.7), 0), INK, Enum.Material.SmoothPlastic, false)
+	label(board, Enum.NormalId.Front, if index == 1 then "250F PHYSICS LAB" else "TEST GATE " .. index,
+		if index == 1 then "CLOCKWISE TEST LAP | DEVELOPMENT ONLY" else "Follow clockwise. Practice branches have no timing gates.")
+	label(board, Enum.NormalId.Back, if index == 1 then "START / FINISH" else "TEST GATE " .. index, "Clockwise test route")
+	referenceLine(model, "CrossingPlane", frame, ROAD_WIDTH_M, if index == 1 then WHITE else TEAL)
+end
+
+function TestTrack.build(world: Instance): Course
+	local lab = folder(world, "250FPhysicsTestTrack")
+	lab:SetAttribute("MetresPerStud", METRES_PER_STUD)
+	lab:SetAttribute("Purpose", "Development validation; not approved competitive physics")
+	local stations: { Station } = {}
+	local road = folder(lab, "ClockwiseTestCircuit")
+	local terrain = folder(lab, "SurfaceLab")
+	local signs = folder(lab, "StationInstructions")
+	local obstacles = folder(lab, "MeasuredObstacles")
+	local ground = block(lab, "GrassRunoff", Vector3.new(m(70), m(1), m(106)),
+		CFrame.new(0, ROAD_Y - m(0.5), 0), SURFACES.grass.color, SURFACES.grass.material, true)
+	collisionSurface(ground, "grass")
+
+	-- A 44 x 74 m rounded circuit. All roads are 10 m wide and flush with the
+	-- runoff, so leaving the lane does not hit an artificial vertical road curb.
+	span(road, "LaunchStraight", position(-22, ROAD_EPSILON_M, 27), position(-22, ROAD_EPSILON_M, -27), ROAD_WIDTH_M, "dirt")
+	span(road, "NorthStraight", position(-12, ROAD_EPSILON_M, -37), position(12, ROAD_EPSILON_M, -37), ROAD_WIDTH_M, "dirt")
+	span(road, "TabletopStraight", position(22, ROAD_EPSILON_M, -27), position(22, ROAD_EPSILON_M, 27), ROAD_WIDTH_M, "dirt")
+	span(road, "WhoopsStraight", position(12, ROAD_EPSILON_M, 37), position(-12, ROAD_EPSILON_M, 37), ROAD_WIDTH_M, "loam")
+	curvedRoad(road, "FlatNorthWestTurn", -12, -27, math.pi, false)
+	curvedRoad(road, "NorthEastBerm", 12, -27, -math.pi / 2, true)
+	curvedRoad(road, "FlatSouthEastTurn", 12, 27, 0, false)
+	curvedRoad(road, "SouthWestBerm", -12, 27, math.pi / 2, true)
+
+	local north, south, west = -Vector3.zAxis, Vector3.zAxis, -Vector3.xAxis
+	local launchFrame = CFrame.lookAt(position(-22, ROAD_EPSILON_M, 25), position(-22, ROAD_EPSILON_M, 24))
+	station(stations, signs, "launch", "01 | CLUTCH + BALANCE", "FOUNDATION", "dirt", launchFrame, 15, ROAD_WIDTH_M,
+		"Neutral, clutch in, feet down. Select first, release clutch progressively. F raises / lowers feet. No automatic balance.")
+	for distance = 0, 10 do
+		if distance % 5 == 0 then
+			local frame = launchFrame * CFrame.new(0, 0, -m(distance))
+			referenceLine(signs, "Launch" .. distance .. "m", frame, 6, if distance == 10 then TEAL else WHITE)
+		end
+	end
+	sign(signs, "LaunchDistance", launchFrame * CFrame.new(m(7.6), 0, -m(10)), "10 m LAUNCH DATUM", "Repeat from the 0 m line. Compare clutch slip, speed and wheelspin in telemetry.")
+
+	local bumpOrigin = position(-22, ROAD_EPSILON_M + 0.003, 10)
+	flat(terrain, "BrakingHardpack", -22, 4, 6, 12, "hardpack")
+	local bumpHeights = { 0.12, 0.15, 0.18, 0.22, 0.16 }
+	profile(obstacles, "BrakingBump", bumpOrigin, north, 12, 6, "hardpack", function(distance)
+		local result = 0
+		for index, height in bumpHeights do
+			local centre = 1.8 + (index - 1) * 2
+			local delta = math.abs(distance - centre)
+			if delta < 0.65 then
+				result = math.max(result, height * (1 + math.cos(math.pi * delta / 0.65)) / 2)
+			end
+		end
+		return result
+	end, 0.13)
+	station(stations, signs, "braking", "02 | BRAKING BUMPS", "INTERMEDIATE", "hardpack",
+		CFrame.lookAt(bumpOrigin, bumpOrigin + north), 12, 6,
+		"Five bumps: 0.12-0.22 m tall, 2 m spacing. Ride north. Compare separate brakes and compression / rebound; flat bypass on both sides.")
+
+	local rutOrigin = position(-22, ROAD_EPSILON_M + 0.003, -2)
+	span(terrain, "LoamRutFloors", rutOrigin, rutOrigin + north * m(16), ROAD_WIDTH_M, "loam")
+	rutSection(obstacles, rutOrigin, north)
+	station(stations, signs, "ruts", "03 | REAL RUT CHANNELS", "INTERMEDIATE", "loam",
+		CFrame.lookAt(rutOrigin, rutOrigin + north), 16, ROAD_WIDTH_M,
+		"Ride north. Four 0.6 m lanes between rounded banks, depth 0.16 m. Channels are collision geometry; entering sideways can deflect a tire.")
+	station(stations, signs, "flat-turn", "04 | FLAT CORNER", "FOUNDATION", "dirt",
+		CFrame.lookAt(position(-22, ROAD_EPSILON_M, -25), position(-22, ROAD_EPSILON_M, -26)), 15.7, ROAD_WIDTH_M,
+		"10 m centreline radius. Turn right. Brake before turning; learn steering, lean and rider-body movement without bank support.")
+	station(stations, signs, "berm", "05 | BANKED CORNER", "INTERMEDIATE", "loam",
+		CFrame.lookAt(position(10, ROAD_EPSILON_M, -37), position(11, ROAD_EPSILON_M, -37)), 15.7, ROAD_WIDTH_M,
+		"Turn right. Outer half rises smoothly to a 16 degree bank; inner half stays flat. Repeat speed and line before adjusting suspension.")
+
+	local easyOrigin = position(22, ROAD_EPSILON_M, -15)
+	tabletop(obstacles, "EasyTabletop", easyOrigin, south, 1.3, 10, 3, 12, 6)
+	station(stations, signs, "tabletop", "06 | SMALL TABLETOP", "INTERMEDIATE", "dirt",
+		CFrame.lookAt(easyOrigin, easyOrigin + south), 25, 6,
+		"Ride south: 1.3 m rise / 10 m takeoff / 3 m top / 12 m landing. 12 m approach. Flat side lanes bypass the jump.")
+	for distance = 0, 10 do
+		if distance % 10 == 0 then
+			local p = position(22, ROAD_EPSILON_M, 10 + distance)
+			referenceLine(signs, "SmallJumpRunout" .. distance .. "m", CFrame.lookAt(p, p + south), 6, WHITE)
+		end
+	end
+
+	local whoopOrigin = position(10, ROAD_EPSILON_M, 37)
+	profile(obstacles, "Whoop", whoopOrigin, west, 20, 4, "loam", function(distance)
+		return 0.45 * math.sin(distance / 4 * math.pi) ^ 2
+	end, 0.16)
+	station(stations, signs, "whoops", "07 | FIVE MEASURED WHOOPS", "ADVANCED", "loam",
+		CFrame.lookAt(whoopOrigin, whoopOrigin + west), 20, 4,
+		"Ride west. Five rounded 0.45 m peaks, 4 m spacing. Stand and manage throttle / rider position. Flat bypass lanes flank the 4 m obstacle lane.")
+
+	-- Independent jump branch: the lap circuit never requires this advanced
+	-- obstacle. Its measured runout is open ground, not a wall or a spawn pad.
+	span(terrain, "BigJumpLane", position(-2, ROAD_EPSILON_M, -49), position(-2, ROAD_EPSILON_M, 34), 8, "dirt")
+	local bigOrigin = position(-2, ROAD_EPSILON_M, -31)
+	tabletop(obstacles, "LargeJump", bigOrigin, south, 2.6, 18, 4, 20, 6)
+	station(stations, signs, "large-jump", "08 | LARGE JUMP BRANCH", "ADVANCED", "dirt",
+		CFrame.lookAt(bigOrigin, bigOrigin + south), 42, 6,
+		"Ride south: 2.6 m rise / 18 m takeoff / 4 m top / 20 m landing. 18 m approach + 20 m clear runout. Inspect pitch, roll and tire loading.")
+	for distance = 0, 20, 10 do
+		local p = position(-2, ROAD_EPSILON_M, 11 + distance)
+		referenceLine(signs, "LargeJumpRunout" .. distance .. "m", CFrame.lookAt(p, p + south), 8, if distance == 20 then TEAL else WHITE)
+	end
+	sign(signs, "LargeJumpLanding", CFrame.lookAt(position(5, 0, 11), position(4, 0, 11)),
+		"LANDING + 20 m RUNOUT", "Check tire loads and crash state. Landing guides describe angles; they never correct the bike.")
+
+	local surfaces = { "dirt", "sand", "mud", "hardpack" }
+	for index, surface in surfaces do
+		local z = -19 + (index - 1) * 9
+		flat(terrain, surface .. "TractionPatch", 10, z, 6, 8, surface)
+		local frame = CFrame.lookAt(position(10, ROAD_EPSILON_M, z - 4), position(10, ROAD_EPSILON_M, z - 3))
+		station(stations, signs, "traction-" .. surface, string.upper(surface) .. " TRACTION PATCH", "FOUNDATION", surface,
+			frame, 8, 6, "Ride south at a repeatable speed. Compare front brake washout, rear wheelspin, clutch and lean. Surface tags affect each tire independently.")
+	end
+	local pad = block(terrain, "FlatLowSpeedCornerPad", Vector3.new(m(0.2), m(16), m(16)),
+		CFrame.new(position(10, ROAD_EPSILON_M, 23) - Vector3.yAxis * m(0.1)) * CFrame.Angles(0, 0, math.pi / 2),
+		SURFACES.loam.color, SURFACES.loam.material, true)
+	pad.Shape = Enum.PartType.Cylinder
+	collisionSurface(pad, "loam")
+	station(stations, signs, "corner-pad", "LOW-SPEED CORNER PAD", "FOUNDATION", "loam",
+		CFrame.lookAt(position(10, ROAD_EPSILON_M, 15), position(10, ROAD_EPSILON_M, 16)), 16, 16,
+		"Flat 16 m pad. Practice circles in either direction, feet, clutch and slow-speed steering. No hidden stabilizer or landing correction.")
+
+	-- Gate normals point along clockwise travel. RaceRules accepts +local-Z
+	-- to -local-Z crossings, so these frames preserve its existing contract.
+	local points = {
+		{ position(-22, ROAD_EPSILON_M, 16), north },
+		{ position(-22, ROAD_EPSILON_M, -23), north },
+		{ position(0, ROAD_EPSILON_M, -37), Vector3.xAxis },
+		{ position(22, ROAD_EPSILON_M, -22), south },
+		{ position(22, ROAD_EPSILON_M, 20), south },
+		{ position(11, ROAD_EPSILON_M, 37), west },
+		{ position(-11, ROAD_EPSILON_M, 37), west },
+		{ position(-22, ROAD_EPSILON_M, 26), north },
+	}
+	local gates: { Gate } = {}
+	local gateFolder = folder(lab, "DevelopmentLapGates")
+	for index, data in points do
+		local frame = CFrame.lookAt(data[1], data[1] + data[2])
+		table.insert(gates, { cframe = frame, width = m(ROAD_WIDTH_M) })
+		gate(gateFolder, frame, index)
+	end
+	return {
+		gates = gates,
+		checkpointCount = #gates,
+		stations = stations,
+		spawnCFrame = function(self: Course, slot: number): CFrame
+			local safeSlot = math.clamp(math.floor(slot), 1, 8) - 1
+			local laneM = (safeSlot % 4 - 1.5) * 1.8
+			local rowM = math.floor(safeSlot / 4) * 3
+			-- No platform or anchoring: manual feet support the stopped motorcycle.
+			-- 3.2 studs puts the prototype COM just above its contact-rest height.
+			return self.gates[1].cframe * CFrame.new(m(laneM), 3.2, m(6 + rowM))
+		end,
+	}
+end
+
+return TestTrack
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Track</string>
           <string name="Source"><![CDATA[--!strict
@@ -695,7 +2046,7 @@ local function part(
 	result.Material = material
 	result.Anchored = true
 	result.CanCollide = if canCollide == nil then true else canCollide
-	result.CanTouch = false
+	result.CanTouch = result.CanCollide
 	result.TopSurface = Enum.SurfaceType.Smooth
 	result.BottomSurface = Enum.SurfaceType.Smooth
 	result.Parent = parent
@@ -946,7 +2297,7 @@ return Track
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Script" referent="9">
+      <Item class="Script" referent="19">
         <Properties>
           <string name="Name">main</string>
           <token name="RunContext">0</token>
@@ -964,7 +2315,10 @@ local Track = require(script.Parent:WaitForChild("Track"))
 local world = Instance.new("Folder")
 world.Name = "DirtlineMX"
 world.Parent = workspace
-local track = Track.build(world)
+-- Retain the original race circuit; Phase 1 opens in the dedicated physics lab.
+local track = if Config.Mode == "PhysicsLab"
+	then require(script.Parent:WaitForChild("TestTrack")).build(world)
+	else Track.build(world)
 local bikes = Bikes.new(world)
 
 local remotes = Instance.new("Folder")
@@ -991,6 +2345,9 @@ type Rider = {
 	laps: IntValue,
 	best: NumberValue,
 	characterConnection: RBXScriptConnection?,
+	lastAction: number,
+	crashNotified: boolean,
+	outOfBounds: boolean,
 }
 local riders: { [Player]: Rider } = {}
 local nextSlot = 0
@@ -1011,6 +2368,8 @@ local function respawn(player: Player)
 	rider.respawning = true
 	rider.lastReset = workspace:GetServerTimeNow()
 	rider.lastPosition = nil
+	rider.crashNotified = false
+	rider.outOfBounds = false
 	RaceRules.reset(rider.race)
 	setMessage(rider, "Cross START / FINISH to start your lap")
 	bikes:spawn(player, track:spawnCFrame(rider.slot))
@@ -1042,6 +2401,9 @@ local function addPlayer(player: Player)
 		laps = laps,
 		best = best,
 		characterConnection = nil,
+		lastAction = -math.huge,
+		crashNotified = false,
+		outOfBounds = false,
 	}
 	riders[player] = rider
 	rider.characterConnection = player.CharacterAdded:Connect(function()
@@ -1052,18 +2414,42 @@ local function addPlayer(player: Player)
 	end
 end
 
-input.OnServerEvent:Connect(function(player, throttle, steer, brake)
-	-- Bikes verifies argument types, rates, range and ownership of the occupied seat.
-	bikes:input(player, throttle, steer, brake)
+input.OnServerEvent:Connect(function(player, packet)
+	-- Bikes validates sequence, independent control axes, rate and rider ownership.
+	bikes:input(player, packet)
 end)
 
-action.OnServerEvent:Connect(function(player, command)
-	if command ~= "Respawn" then
+action.OnServerEvent:Connect(function(player, command, payload)
+	local rider = riders[player]
+	if not rider or typeof(command) ~= "string" then
 		return
 	end
-	local rider = riders[player]
-	if rider and not rider.respawning and workspace:GetServerTimeNow() - rider.lastReset >= Config.ResetCooldown then
-		task.defer(respawn, player)
+	local now = workspace:GetServerTimeNow()
+	if now - rider.lastAction < 0.2 then
+		return
+	end
+	rider.lastAction = now
+	if command == "Respawn" then
+		local telemetry = bikes:getTelemetry(player)
+		if telemetry and telemetry.crashed and (telemetry.recoveryRemaining or 0) > 0 then
+			setMessage(rider, string.format("Recover in %.1fs", telemetry.recoveryRemaining))
+			return
+		end
+		if not rider.respawning and now - rider.lastReset >= Config.ResetCooldown then
+			task.defer(respawn, player)
+		end
+	elseif command == "StartEngine" then
+		setMessage(rider, if bikes:restart(player) then "Engine started — clutch, select gear, raise feet" else "Pull the clutch or select neutral to start")
+	elseif command == "Tune" then
+		-- Competitive sessions use identical server calibration. Setup exploration
+		-- is allowed only in this lab, stationary, with manual feet deployed.
+		if Config.Mode == "PhysicsLab" and bikes:tune(player, payload) then
+			RaceRules.reset(rider.race)
+			rider.lastPosition = nil
+			setMessage(rider, "Suspension setup applied — current test lap invalidated")
+		else
+			setMessage(rider, "Tune only while parked in the physics lab with feet down")
+		end
 	end
 end)
 
@@ -1081,8 +2467,11 @@ for _, player in Players:GetPlayers() do
 end
 
 local sinceSnapshot = 0
-RunService.Heartbeat:Connect(function(dt)
+-- Contact/rotor impulses are supplied before Roblox integrates its rigid bodies.
+RunService.PreSimulation:Connect(function(dt)
 	bikes:update(dt)
+end)
+RunService.Heartbeat:Connect(function(dt)
 	sinceSnapshot += dt
 	local publish = sinceSnapshot >= Config.StateInterval
 	if publish then
@@ -1090,13 +2479,29 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 	local now = workspace:GetServerTimeNow()
 	for player, rider in riders do
+		local physics = bikes:getTelemetry(player)
+		if physics and physics.budgetOverrun and rider.race.lapStart ~= nil then
+			RaceRules.reset(rider.race)
+			rider.lastPosition = nil
+			setMessage(rider, "Physics step budget exceeded — test lap invalidated")
+		end
+		if physics and physics.crashed and not rider.crashNotified then
+			rider.crashNotified = true
+			RaceRules.reset(rider.race)
+			rider.lastPosition = nil
+			setMessage(rider, (physics.crashReason or "Crash") .. " — wait, then R to recover")
+		end
 		local position = bikes:getPosition(player)
 		if position and not rider.respawning then
 			if position.Y < Config.OutOfBoundsY or math.abs(position.X) > Config.ArenaLimit or math.abs(position.Z) > Config.ArenaLimit then
-				if now - rider.lastReset >= Config.ResetCooldown then
-					task.defer(respawn, player)
+				if not rider.outOfBounds then
+					rider.outOfBounds = true
+					RaceRules.reset(rider.race)
+					setMessage(rider, "Outside test area — use R for manual recovery")
 				end
-			elseif bikes:isRiding(player) then
+				rider.lastPosition = nil
+			elseif bikes:isRiding(player) and not physics.budgetOverrun then
+				rider.outOfBounds = false
 				local previous = rider.lastPosition
 				if previous then
 					local gate = track.gates[rider.race.nextCheckpoint]
@@ -1137,6 +2542,8 @@ RunService.Heartbeat:Connect(function(dt)
 				lapsFinished = rider.race.lapsFinished,
 				racing = rider.race.lapStart ~= nil,
 				message = if now < rider.messageUntil then rider.message else nil,
+				physics = physics,
+				mode = Config.Mode,
 			})
 		end
 	end
@@ -1146,25 +2553,26 @@ end)
       </Item>
     </Item>
   </Item>
-  <Item class="SoundService" referent="10">
+  <Item class="SoundService" referent="20">
     <Properties>
       <string name="Name">SoundService</string>
       <bool name="RespectFilteringEnabled">true</bool>
     </Properties>
   </Item>
-  <Item class="StarterPlayer" referent="11">
+  <Item class="StarterPlayer" referent="21">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="12">
+    <Item class="StarterPlayerScripts" referent="22">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="13">
+      <Item class="LocalScript" referent="23">
         <Properties>
           <string name="Name">MotocrossClient</string>
           <string name="Source"><![CDATA[--!strict
--- The bike is server simulated. This client sends controls and renders race state.
+-- All motorcycle forces and crash decisions come from the server simulation.
+-- This script only captures rider controls and presents authoritative telemetry.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -1173,10 +2581,12 @@ local ContextActionService = game:GetService("ContextActionService")
 local GuiService = game:GetService("GuiService")
 
 local player = Players.LocalPlayer
-local remotes = ReplicatedStorage:WaitForChild("Motocross"):WaitForChild("Remotes")
+local motocross = ReplicatedStorage:WaitForChild("Motocross")
+local remotes = motocross:WaitForChild("Remotes")
 local inputRemote = remotes:WaitForChild("Input") :: RemoteEvent
 local actionRemote = remotes:WaitForChild("Action") :: RemoteEvent
 local stateRemote = remotes:WaitForChild("State") :: RemoteEvent
+local bikeConfig = require(motocross:WaitForChild("Physics"):WaitForChild("Bike250"))
 
 local colors = {
 	panel = Color3.fromRGB(16, 24, 36),
@@ -1186,6 +2596,7 @@ local colors = {
 	muted = Color3.fromRGB(155, 176, 194),
 	orange = Color3.fromRGB(255, 128, 54),
 	teal = Color3.fromRGB(64, 236, 201),
+	red = Color3.fromRGB(255, 104, 91),
 }
 
 local function create(className: string, parent: Instance, properties: { [string]: any }): any
@@ -1215,6 +2626,21 @@ local function label(parent: Instance, text: string, position: UDim2, size: UDim
 	})
 end
 
+local function button(parent: Instance, text: string, position: UDim2, size: UDim2): TextButton
+	local result = create("TextButton", parent, {
+		Position = position,
+		Size = size,
+		BackgroundColor3 = colors.panelLight,
+		BorderSizePixel = 0,
+		Text = text,
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = colors.text,
+	}) :: TextButton
+	corner(result, 6)
+	return result
+end
+
 local gui = create("ScreenGui", player:WaitForChild("PlayerGui"), {
 	Name = "DirtlineHUD",
 	ResetOnSpawn = false,
@@ -1231,318 +2657,368 @@ local function panel(name: string, position: UDim2, size: UDim2, anchor: Vector2
 		Size = size,
 		AnchorPoint = anchor,
 		BackgroundColor3 = colors.panel,
-		BackgroundTransparency = 0.09,
+		BackgroundTransparency = 0.06,
 		BorderSizePixel = 0,
 	}) :: Frame
-	corner(frame, 14)
-	create("UIStroke", frame, { Color = colors.border, Transparency = 0.5, Thickness = 1 })
+	corner(frame, 12)
+	create("UIStroke", frame, { Color = colors.border, Transparency = 0.4, Thickness = 1 })
 	table.insert(panelScales, create("UIScale", frame, { Scale = 1 }))
 	return frame
 end
 
-local brand = panel("Brand", UDim2.fromOffset(16, 16), UDim2.fromOffset(240, 108), Vector2.zero)
-create("Frame", brand, {
-	Position = UDim2.fromOffset(0, 17),
-	Size = UDim2.fromOffset(4, 42),
-	BackgroundColor3 = colors.orange,
-	BorderSizePixel = 0,
-})
-local title = label(brand, "DIRTLINE MX", UDim2.fromOffset(16, 12), UDim2.fromOffset(213, 31), 25)
+local brand = panel("Brand", UDim2.fromOffset(16, 16), UDim2.fromOffset(260, 116), Vector2.zero)
+local title = label(brand, "DIRTLINE MX", UDim2.fromOffset(16, 10), UDim2.fromOffset(235, 30), 24)
 title.Font = Enum.Font.GothamBlack
-label(brand, "MOTOCROSS TIME TRIAL", UDim2.fromOffset(17, 44), UDim2.fromOffset(210, 18), 10, colors.muted)
-local resetButton = create("TextButton", brand, {
-	Name = "ResetBike",
-	Position = UDim2.fromOffset(16, 72),
-	Size = UDim2.fromOffset(208, 26),
-	BackgroundColor3 = colors.panelLight,
-	BorderSizePixel = 0,
-	AutoButtonColor = true,
-	Text = "R  /  Y     RESET BIKE",
-	Font = Enum.Font.GothamBold,
-	TextSize = 10,
-	TextColor3 = colors.text,
-}) :: TextButton
-corner(resetButton, 6)
+label(brand, "PHYSICS LAB  /  DL-MX 250F", UDim2.fromOffset(17, 43), UDim2.fromOffset(235, 17), 10, colors.orange)
+local helpButton = button(brand, "H  CONTROLS", UDim2.fromOffset(16, 77), UDim2.fromOffset(109, 27))
+local tuneButton = button(brand, "U  SUSPENSION", UDim2.fromOffset(135, 77), UDim2.fromOffset(109, 27))
 
-local timing = panel("Timing", UDim2.new(1, -16, 0, 16), UDim2.fromOffset(244, 108), Vector2.new(1, 0))
+local timing = panel("Timing", UDim2.new(1, -16, 0, 16), UDim2.fromOffset(244, 116), Vector2.new(1, 0))
 label(timing, "LAP TIME", UDim2.fromOffset(16, 11), UDim2.fromOffset(210, 17), 10, colors.muted)
 local timeLabel = label(timing, "00:00.00", UDim2.fromOffset(14, 29), UDim2.fromOffset(219, 37), 32)
 timeLabel.Font = Enum.Font.GothamBold
-local bestLabel = label(timing, "BEST    --:--.--", UDim2.fromOffset(16, 78), UDim2.fromOffset(212, 18), 13, colors.teal)
+local bestLabel = label(timing, "BEST    --:--.--", UDim2.fromOffset(16, 86), UDim2.fromOffset(212, 18), 13, colors.teal)
 
-local status = panel("Status", UDim2.new(0.5, 0, 0, 137), UDim2.fromOffset(430, 48), Vector2.new(0.5, 0))
-local statusLabel = label(status, "CROSS THE START GATE TO BEGIN", UDim2.fromOffset(12, 0), UDim2.new(1, -24, 1, 0), 14, colors.teal)
+local status = panel("Status", UDim2.new(0.5, 0, 0, 144), UDim2.fromOffset(620, 58), Vector2.new(0.5, 0))
+local statusLabel = label(status, "NEUTRAL  /  CLUTCH IN  /  FEET DOWN", UDim2.fromOffset(14, 7), UDim2.new(1, -28, 0, 23), 14, colors.teal)
 statusLabel.TextXAlignment = Enum.TextXAlignment.Center
+local statusHint = label(status, "Select first with E / D-pad up; release clutch with B / LB and add throttle.", UDim2.fromOffset(14, 31), UDim2.new(1, -28, 0, 17), 10, colors.muted)
+statusHint.TextXAlignment = Enum.TextXAlignment.Center
 
-local speedPanel = panel("Speed", UDim2.new(0, 16, 1, -16), UDim2.fromOffset(214, 120), Vector2.new(0, 1))
-label(speedPanel, "GROUND SPEED", UDim2.fromOffset(16, 11), UDim2.fromOffset(188, 16), 10, colors.muted)
-local speedLabel = label(speedPanel, "0", UDim2.fromOffset(13, 26), UDim2.fromOffset(128, 62), 52)
+local telemetryPanel = panel("Motorcycle", UDim2.new(0, 16, 1, -16), UDim2.fromOffset(332, 224), Vector2.new(0, 1))
+label(telemetryPanel, "250F  /  LIVE SIMULATION", UDim2.fromOffset(16, 10), UDim2.fromOffset(300, 17), 10, colors.muted)
+local speedLabel = label(telemetryPanel, "0", UDim2.fromOffset(12, 27), UDim2.fromOffset(110, 52), 42)
 speedLabel.Font = Enum.Font.GothamBlack
-label(speedPanel, "KM/H", UDim2.fromOffset(143, 62), UDim2.fromOffset(60, 21), 12, colors.muted)
-local speedTrack = create("Frame", speedPanel, {
-	Position = UDim2.fromOffset(16, 99),
-	Size = UDim2.new(1, -32, 0, 5),
-	BackgroundColor3 = colors.panelLight,
-	BorderSizePixel = 0,
+label(telemetryPanel, "KM/H", UDim2.fromOffset(122, 56), UDim2.fromOffset(43, 16), 10, colors.muted)
+local gearLabel = label(telemetryPanel, "N", UDim2.fromOffset(214, 24), UDim2.fromOffset(70, 58), 48, colors.orange)
+gearLabel.Font = Enum.Font.GothamBlack
+local rpmLabel = label(telemetryPanel, "0 RPM", UDim2.fromOffset(16, 83), UDim2.fromOffset(300, 18), 12)
+local rpmTrack = create("Frame", telemetryPanel, {
+	Position = UDim2.fromOffset(16, 108), Size = UDim2.fromOffset(300, 5), BackgroundColor3 = colors.panelLight, BorderSizePixel = 0,
 }) :: Frame
-corner(speedTrack, 3)
-local speedFill = create("Frame", speedTrack, {
-	Size = UDim2.fromScale(0, 1),
-	BackgroundColor3 = colors.orange,
-	BorderSizePixel = 0,
-}) :: Frame
-corner(speedFill, 3)
+local rpmFill = create("Frame", rpmTrack, { Size = UDim2.fromScale(0, 1), BackgroundColor3 = colors.orange, BorderSizePixel = 0 }) :: Frame
+local inputLabel = label(telemetryPanel, "CLUTCH 100%  /  SEATED  /  FEET DOWN", UDim2.fromOffset(16, 123), UDim2.fromOffset(300, 18), 10, colors.teal)
+local travelLabel = label(telemetryPanel, "TRAVEL  F 0 mm  /  R 0 mm", UDim2.fromOffset(16, 148), UDim2.fromOffset(300, 18), 11)
+local slipLabel = label(telemetryPanel, "SLIP  F 0.00  /  R 0.00", UDim2.fromOffset(16, 174), UDim2.fromOffset(300, 18), 11)
+local attitudeLabel = label(telemetryPanel, "ROLL 0°  /  PITCH 0°  /  GROUND", UDim2.fromOffset(16, 198), UDim2.fromOffset(300, 17), 10, colors.muted)
 
-local progressPanel = panel("Progress", UDim2.new(0.5, 0, 1, -16), UDim2.fromOffset(330, 90), Vector2.new(0.5, 1))
+local progressPanel = panel("Progress", UDim2.new(0.5, 0, 1, -16), UDim2.fromOffset(290, 90), Vector2.new(0.5, 1))
 local lapLabel = label(progressPanel, "LAP 01", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 23), 19)
-lapLabel.Font = Enum.Font.GothamBold
-local gateLabel = label(progressPanel, "NEXT GATE  01 / 01", UDim2.fromOffset(16, 38), UDim2.new(1, -32, 0, 18), 11, colors.muted)
+local gateLabel = label(progressPanel, "NEXT GATE  01 / 01", UDim2.fromOffset(16, 40), UDim2.new(1, -32, 0, 18), 11, colors.muted)
 local progressTrack = create("Frame", progressPanel, {
-	Position = UDim2.fromOffset(16, 69),
-	Size = UDim2.new(1, -32, 0, 5),
-	BackgroundColor3 = colors.panelLight,
-	BorderSizePixel = 0,
+	Position = UDim2.fromOffset(16, 72), Size = UDim2.new(1, -32, 0, 4), BackgroundColor3 = colors.panelLight, BorderSizePixel = 0,
 }) :: Frame
-corner(progressTrack, 3)
-local progressFill = create("Frame", progressTrack, {
-	Size = UDim2.fromScale(0, 1),
-	BackgroundColor3 = colors.teal,
-	BorderSizePixel = 0,
-}) :: Frame
-corner(progressFill, 3)
+local progressFill = create("Frame", progressTrack, { Size = UDim2.fromScale(0, 1), BackgroundColor3 = colors.teal, BorderSizePixel = 0 }) :: Frame
 
-local controlsPanel = panel("Controls", UDim2.new(1, -16, 1, -16), UDim2.fromOffset(250, 90), Vector2.new(1, 1))
-label(controlsPanel, "RIDE CONTROLS", UDim2.fromOffset(16, 10), UDim2.fromOffset(220, 17), 10, colors.orange)
-local controlsLabel = label(controlsPanel, "W / S  Gas / reverse   A / D  Steer\nSPACE  Brake   R  Reset bike", UDim2.fromOffset(16, 32), UDim2.fromOffset(220, 43), 11, colors.muted)
-controlsLabel.TextYAlignment = Enum.TextYAlignment.Top
-controlsLabel.TextWrapped = true
+local actionsPanel = panel("Actions", UDim2.new(1, -16, 1, -16), UDim2.fromOffset(224, 132), Vector2.new(1, 1))
+label(actionsPanel, "MANUAL SIMULATION", UDim2.fromOffset(16, 10), UDim2.fromOffset(196, 17), 10, colors.orange)
+label(actionsPanel, "Riding skill controls balance.\nRecovering invalidates the current lap.", UDim2.fromOffset(16, 31), UDim2.fromOffset(196, 32), 10, colors.muted)
+local resetButton = button(actionsPanel, "R  /  Y     RECOVER BIKE", UDim2.fromOffset(16, 70), UDim2.fromOffset(192, 24))
+local starterButton = button(actionsPanel, "T  /  L-STICK     START ENGINE", UDim2.fromOffset(16, 100), UDim2.fromOffset(192, 24))
 
-local intro = panel("Welcome", UDim2.fromScale(0.5, 0.47), UDim2.fromOffset(520, 250), Vector2.new(0.5, 0.5))
-intro.ZIndex = 5
-local introTitle = label(intro, "FIND YOUR LINE.", UDim2.fromOffset(24, 18), UDim2.new(1, -48, 0, 38), 29)
-introTitle.Font = Enum.Font.GothamBlack
-label(intro, "Cross the start gate, then follow every numbered gate.\nKeep the wheels planted and chase your best lap.", UDim2.fromOffset(24, 64), UDim2.new(1, -48, 0, 48), 15, colors.muted).TextWrapped = true
-local introControls = label(intro, "W / S  Gas / reverse   A / D  Steer\nSPACE  Brake   R  Reset bike / restart lap", UDim2.fromOffset(24, 128), UDim2.new(1, -48, 0, 44), 13)
-introControls.TextWrapped = true
-local dismissButton = create("TextButton", intro, {
-	Position = UDim2.fromOffset(24, 188),
-	Size = UDim2.new(1, -48, 0, 40),
-	BackgroundColor3 = colors.orange,
-	BorderSizePixel = 0,
-	AutoButtonColor = true,
-	Text = "LET'S RIDE",
-	TextColor3 = colors.panel,
-	TextSize = 14,
-	Font = Enum.Font.GothamBold,
-}) :: TextButton
-corner(dismissButton, 8)
+local help = panel("Help", UDim2.fromScale(0.5, 0.48), UDim2.fromOffset(680, 490), Vector2.new(0.5, 0.5))
+help.Visible = false
+label(help, "LEARN THE 250F", UDim2.fromOffset(22, 14), UDim2.fromOffset(580, 30), 23, colors.orange)
+local helpClose = button(help, "CLOSE", UDim2.new(1, -88, 0, 17), UDim2.fromOffset(66, 25))
+local keyboardHelp = table.concat({
+	"KEYBOARD",
+	"W  Progressive throttle    Space  Front brake    S  Rear brake",
+	"V / B  Meter clutch in / out    Shift  Quick clutch pull    Q / E  Shift",
+	"A / D  Handlebar steering    Z / X  Bike lean",
+	"I / K  Body forward / back    J / L  Body left / right",
+	"C  Stand / sit    F  Feet down / up",
+	"T  Engine starter    R  Recover bike    U  Suspension setup",
+}, "\n")
+local controllerHelp = table.concat({
+	"CONTROLLER",
+	"RT  Throttle    LT  Front brake    RB  Rear brake    LB  Pull clutch",
+	"Left stick  Steering    Right stick  Rider fore/aft and side",
+	"D-pad left / right  Bike lean    D-pad down / up  Shift",
+	"A  Stand / sit    X  Feet down / up    Y  Recover",
+	"Left stick click  Engine starter    Right stick click  Controls help",
+}, "\n")
+local helpText = label(help, keyboardHelp .. "\n\n" .. controllerHelp, UDim2.fromOffset(22, 57), UDim2.new(1, -44, 0, 287), 12)
+helpText.TextYAlignment = Enum.TextYAlignment.Top
+local helpTips = label(help, "Begin in neutral, clutch in and feet down. Select first, add throttle, then hold B to meter clutch release (V pulls it back). Shift is a quick pull override. On controller, hold LB; release it for a 0.6s lever release, re-pull or tap to meter. Lift feet when moving.\n\nIn the air: move your body with I / K and J / L; use Z / X for roll. Throttle and the rear brake affect rotating-wheel reaction. Takeoff and touchdown are physical; there is no landing correction.", UDim2.fromOffset(22, 350), UDim2.new(1, -44, 0, 116), 11, colors.muted)
+helpTips.TextWrapped = true
+helpTips.TextYAlignment = Enum.TextYAlignment.Top
 
-local introDismissed = false
-local function dismissIntro()
-	if introDismissed then
-		return
-	end
-	introDismissed = true
-	intro.Visible = false
+local tuning = panel("SuspensionSetup", UDim2.fromScale(0.5, 0.48), UDim2.fromOffset(580, 405), Vector2.new(0.5, 0.5))
+tuning.Visible = false
+label(tuning, "SUSPENSION SETUP", UDim2.fromOffset(22, 14), UDim2.fromOffset(430, 29), 21, colors.orange)
+local tuneClose = button(tuning, "CLOSE", UDim2.new(1, -88, 0, 17), UDim2.fromOffset(66, 25))
+local tuneExplanation = label(tuning, "Park in the physics lab before applying. A setup change invalidates the current lap.\nValues use SI units; each wheel has its own spring and damping settings.", UDim2.fromOffset(22, 52), UDim2.new(1, -44, 0, 44), 11, colors.muted)
+tuneExplanation.TextWrapped = true
+label(tuning, "FRONT", UDim2.fromOffset(22, 103), UDim2.fromOffset(244, 21), 13, colors.teal)
+label(tuning, "REAR", UDim2.fromOffset(310, 103), UDim2.fromOffset(244, 21), 13, colors.teal)
+
+local setupValues: { [string]: { [string]: number } } = { Front = {}, Rear = {} }
+local setupBoxes: { [string]: { [string]: TextBox } } = { Front = {}, Rear = {} }
+local setupRows = {
+	{ key = "SpringRate", title = "Spring (N/m)", step = 500, min = 8000, max = 40000, format = "%.0f" },
+	{ key = "Compression", title = "Compress (N·s/m)", step = 100, min = 300, max = 5000, format = "%.0f" },
+	{ key = "Rebound", title = "Rebound (N·s/m)", step = 100, min = 300, max = 6000, format = "%.0f" },
+	{ key = "Preload", title = "Preload (m)", step = 0.002, min = 0, max = 0.035, format = "%.3f" },
+}
+
+local function updateSetupBox(side: string, spec: any)
+	setupBoxes[side][spec.key].Text = string.format(spec.format, setupValues[side][spec.key])
 end
-dismissButton.Activated:Connect(dismissIntro)
-task.delay(10, dismissIntro)
+
+for sideIndex, side in ipairs({ "Front", "Rear" }) do
+	local x = if sideIndex == 1 then 22 else 310
+	for rowIndex, spec in ipairs(setupRows) do
+		local y = 130 + (rowIndex - 1) * 43
+		setupValues[side][spec.key] = bikeConfig.Suspension[side][spec.key]
+		label(tuning, spec.title, UDim2.fromOffset(x, y), UDim2.fromOffset(131, 26), 10, colors.muted)
+		local minus = button(tuning, "−", UDim2.fromOffset(x + 134, y), UDim2.fromOffset(24, 27))
+		local box = create("TextBox", tuning, {
+			Position = UDim2.fromOffset(x + 162, y), Size = UDim2.fromOffset(57, 27), BackgroundColor3 = colors.panelLight,
+			Text = "", ClearTextOnFocus = false, TextSize = 11, Font = Enum.Font.GothamMedium, TextColor3 = colors.text, BorderSizePixel = 0,
+		}) :: TextBox
+		corner(box, 5)
+		setupBoxes[side][spec.key] = box
+		updateSetupBox(side, spec)
+		local plus = button(tuning, "+", UDim2.fromOffset(x + 222, y), UDim2.fromOffset(24, 27))
+		minus.Activated:Connect(function()
+			setupValues[side][spec.key] = math.clamp(setupValues[side][spec.key] - spec.step, spec.min, spec.max)
+			updateSetupBox(side, spec)
+		end)
+		plus.Activated:Connect(function()
+			setupValues[side][spec.key] = math.clamp(setupValues[side][spec.key] + spec.step, spec.min, spec.max)
+			updateSetupBox(side, spec)
+		end)
+		box.FocusLost:Connect(function()
+			local number = tonumber(box.Text)
+			if number and number == number and math.abs(number) < math.huge then
+				setupValues[side][spec.key] = math.clamp(number, spec.min, spec.max)
+			end
+			updateSetupBox(side, spec)
+		end)
+	end
+end
+local defaultsButton = button(tuning, "250F DEFAULTS", UDim2.fromOffset(22, 318), UDim2.fromOffset(157, 30))
+local applyButton = button(tuning, "APPLY PARKED SETUP", UDim2.fromOffset(192, 318), UDim2.fromOffset(366, 30))
+local setupStatus = label(tuning, "Defaults shown. Acceptance is confirmed by the server.", UDim2.fromOffset(22, 364), UDim2.new(1, -44, 0, 19), 10, colors.muted)
+defaultsButton.Activated:Connect(function()
+	for _, side in ipairs({ "Front", "Rear" }) do
+		for _, spec in ipairs(setupRows) do
+			setupValues[side][spec.key] = bikeConfig.Suspension[side][spec.key]
+			updateSetupBox(side, spec)
+		end
+	end
+end)
+
+local mobileNotice = panel("MobileNotice", UDim2.fromScale(0.5, 0.37), UDim2.fromOffset(580, 92), Vector2.new(0.5, 0.5))
+mobileNotice.Visible = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled and not UserInputService.GamepadEnabled
+local mobileText = label(mobileNotice, "Simulation controls require a keyboard or controller.\nMobile riding controls will be adapted later.", UDim2.fromOffset(18, 15), UDim2.new(1, -36, 1, -30), 14, colors.orange)
+mobileText.TextWrapped = true
+mobileText.TextXAlignment = Enum.TextXAlignment.Center
 
 local seated = false
 local focused = true
 local menuOpen = false
 local heldKeys: { [Enum.KeyCode]: boolean } = {}
-local touchHeld: { [string]: { [InputObject]: boolean } } = {}
-local stickSteer = 0
-local triggerGas = 0
-local triggerBrake = 0
-local lastReset = -math.huge
-local touchButtons: { TextButton } = {}
+local steerStick, bodySideStick, bodyForwardStick, triggerThrottle, triggerFrontBrake = 0, 0, 0, 0, 0
+local keyboardThrottle, keyboardFrontBrake, keyboardRearBrake = 0, 0, 0
+local standing = false
+local footDown = true
+local safetyClutch = true
+local manualClutch = 1
+local gamepadClutch = 1
+local gamepadMode = false
+local pendingShifts: { number } = {}
+local sequence = 0
+local lastRecovery = -math.huge
+local lastStarter = -math.huge
+local ownedBike: Instance? = nil
+local bindingActive = false
+
+local function canAct(): boolean
+	return focused and not menuOpen and UserInputService:GetFocusedTextBox() == nil
+end
 
 local function canDrive(): boolean
-	return seated and focused and not menuOpen and UserInputService:GetFocusedTextBox() == nil
+	return seated and canAct() and not help.Visible and not tuning.Visible
+end
+
+local function sendPacket(packet: { [string]: any })
+	sequence += 1
+	packet.seq = sequence
+	inputRemote:FireServer(packet)
+end
+
+local function neutralPacket(): { [string]: any }
+	return {
+		throttle = 0, frontBrake = 0, rearBrake = 0, clutch = 1,
+		steer = 0, lean = 0, bodyForward = 0, bodySide = 0,
+		standing = standing, footDown = footDown, shift = 0,
+	}
 end
 
 local function clearControls()
 	table.clear(heldKeys)
-	for _, touches in pairs(touchHeld) do
-		table.clear(touches)
-	end
-	stickSteer = 0
-	triggerGas = 0
-	triggerBrake = 0
-	-- A release packet must not wait for the next periodic update.
-	inputRemote:FireServer(0, 0, false)
-	for _, button in ipairs(touchButtons) do
-		button.BackgroundColor3 = colors.panel
-	end
+	table.clear(pendingShifts)
+	steerStick, bodySideStick, bodyForwardStick, triggerThrottle, triggerFrontBrake = 0, 0, 0, 0, 0
+	keyboardThrottle, keyboardFrontBrake, keyboardRearBrake = 0, 0, 0
+	safetyClutch = true
+	manualClutch, gamepadClutch = 1, 1
+	-- Focus loss sends an immediate release; the server also enforces an input timeout.
+	sendPacket(neutralPacket())
 end
+
+local function toggleHelp()
+	help.Visible = not help.Visible
+	tuning.Visible = false
+	clearControls()
+end
+local function toggleTuning()
+	tuning.Visible = not tuning.Visible
+	help.Visible = false
+	clearControls()
+end
+helpButton.Activated:Connect(toggleHelp)
+helpClose.Activated:Connect(toggleHelp)
+tuneButton.Activated:Connect(toggleTuning)
+tuneClose.Activated:Connect(toggleTuning)
 
 local function resetBike()
-	if not focused or menuOpen or UserInputService:GetFocusedTextBox() ~= nil then
+	if not canAct() or os.clock() - lastRecovery < 0.8 then
 		return
 	end
-	if os.clock() - lastReset < 0.8 then
-		return
-	end
-	lastReset = os.clock()
+	lastRecovery = os.clock()
+	standing = false
+	footDown = true
 	clearControls()
 	actionRemote:FireServer("Respawn")
-	dismissIntro()
+end
+local function startEngine()
+	if not canAct() or os.clock() - lastStarter < 0.5 then
+		return
+	end
+	lastStarter = os.clock()
+	actionRemote:FireServer("StartEngine")
 end
 resetButton.Activated:Connect(resetBike)
+starterButton.Activated:Connect(startEngine)
+applyButton.Activated:Connect(function()
+	if not canAct() then
+		return
+	end
+	clearControls()
+	actionRemote:FireServer("Tune", { Front = table.clone(setupValues.Front), Rear = table.clone(setupValues.Rear) })
+	setupStatus.Text = "Setup requested. Waiting for server confirmation."
+end)
 
-local function touchPressed(action: string): boolean
-	return touchHeld[action] ~= nil and next(touchHeld[action]) ~= nil
+local function deadzone(value: number): number
+	return if math.abs(value) < 0.08 then 0 else math.sign(value) * ((math.abs(value) - 0.08) / 0.92)
 end
 
-local function controls(): (number, number, boolean)
-	local forward = (heldKeys[Enum.KeyCode.W] or heldKeys[Enum.KeyCode.Up] or touchPressed("gas")) and 1 or 0
-	local reverse = (heldKeys[Enum.KeyCode.S] or heldKeys[Enum.KeyCode.Down] or heldKeys[Enum.KeyCode.ButtonX] or touchPressed("reverse")) and 1 or 0
-	local left = (heldKeys[Enum.KeyCode.A] or heldKeys[Enum.KeyCode.Left] or touchPressed("left")) and 1 or 0
-	local right = (heldKeys[Enum.KeyCode.D] or heldKeys[Enum.KeyCode.Right] or touchPressed("right")) and 1 or 0
-	local throttle = math.clamp(math.max(forward, triggerGas) - reverse, -1, 1)
-	local steer = math.clamp(right - left + stickSteer, -1, 1)
-	local brake = heldKeys[Enum.KeyCode.Space] == true or triggerBrake > 0.15 or touchPressed("brake")
-	return throttle, steer, brake
-end
-
-local function handleControl(actionName: string, inputState: Enum.UserInputState, input: InputObject): Enum.ContextActionResult
+local function handleControl(_actionName: string, inputState: Enum.UserInputState, input: InputObject): Enum.ContextActionResult
 	local key = input.KeyCode
 	local released = inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel
 	if released then
 		heldKeys[key] = nil
 		if key == Enum.KeyCode.Thumbstick1 then
-			stickSteer = 0
+			steerStick = 0
+		elseif key == Enum.KeyCode.Thumbstick2 then
+			bodySideStick, bodyForwardStick = 0, 0
 		elseif key == Enum.KeyCode.ButtonR2 then
-			triggerGas = 0
+			triggerThrottle = 0
 		elseif key == Enum.KeyCode.ButtonL2 then
-			triggerBrake = 0
+			triggerFrontBrake = 0
 		end
 	end
-	-- Reset also works after a crash or dismount, when normal controls pass through.
-	if actionName == "DirtlineReset" then
-		if not focused or menuOpen or UserInputService:GetFocusedTextBox() ~= nil then
-			return Enum.ContextActionResult.Pass
-		end
-		if inputState == Enum.UserInputState.Begin then
+	if not canAct() then
+		return Enum.ContextActionResult.Pass
+	end
+	if inputState == Enum.UserInputState.Begin then
+		if key == Enum.KeyCode.H or key == Enum.KeyCode.ButtonR3 then
+			toggleHelp()
+			return Enum.ContextActionResult.Sink
+		elseif key == Enum.KeyCode.U then
+			toggleTuning()
+			return Enum.ContextActionResult.Sink
+		elseif key == Enum.KeyCode.R or key == Enum.KeyCode.ButtonY then
 			resetBike()
+			return Enum.ContextActionResult.Sink
+		elseif key == Enum.KeyCode.T or key == Enum.KeyCode.ButtonL3 then
+			startEngine()
+			return Enum.ContextActionResult.Sink
 		end
-		return Enum.ContextActionResult.Sink
 	end
 	if not canDrive() then
+		-- Permit GUI navigation, while preventing Space from ejecting the
+		-- seated rider when a setup/help panel covers the riding HUD.
+		if key == Enum.KeyCode.Space then return Enum.ContextActionResult.Sink end
 		return Enum.ContextActionResult.Pass
 	end
 	if not released then
+		gamepadMode = string.sub(input.UserInputType.Name, 1, 7) == "Gamepad"
 		if key == Enum.KeyCode.Thumbstick1 then
-			local x = input.Position.X
-			stickSteer = if math.abs(x) < 0.12 then 0 else math.sign(x) * ((math.abs(x) - 0.12) / 0.88)
+			steerStick = deadzone(input.Position.X)
+		elseif key == Enum.KeyCode.Thumbstick2 then
+			bodySideStick = deadzone(input.Position.X)
+			bodyForwardStick = deadzone(input.Position.Y)
 		elseif key == Enum.KeyCode.ButtonR2 then
-			triggerGas = math.clamp(input.Position.Z, 0, 1)
+			triggerThrottle = math.clamp(input.Position.Z, 0, 1)
 		elseif key == Enum.KeyCode.ButtonL2 then
-			triggerBrake = math.clamp(input.Position.Z, 0, 1)
+			triggerFrontBrake = math.clamp(input.Position.Z, 0, 1)
 		else
+			local wasHeld = heldKeys[key] == true
 			heldKeys[key] = true
+			if inputState == Enum.UserInputState.Begin and not wasHeld then
+				if key == Enum.KeyCode.C or key == Enum.KeyCode.ButtonA then
+					standing = not standing
+				elseif key == Enum.KeyCode.F or key == Enum.KeyCode.ButtonX then
+					footDown = not footDown
+				elseif key == Enum.KeyCode.Q or key == Enum.KeyCode.DPadDown then
+					if #pendingShifts < 4 then table.insert(pendingShifts, -1) end
+				elseif key == Enum.KeyCode.E or key == Enum.KeyCode.DPadUp then
+					if #pendingShifts < 4 then table.insert(pendingShifts, 1) end
+				end
+			end
 		end
-		if key == Enum.KeyCode.W or key == Enum.KeyCode.Up or key == Enum.KeyCode.ButtonR2 then
-			dismissIntro()
+		-- The first deliberate input leaves the focus-loss safety state.
+		-- The manual lever still starts pulled until the rider releases it.
+		if inputState == Enum.UserInputState.Begin or triggerThrottle > 0.01 then
+			safetyClutch = false
 		end
 	end
 	return Enum.ContextActionResult.Sink
 end
 
--- These return Pass whenever the rider leaves their seat, retaining Roblox movement.
-ContextActionService:BindActionAtPriority("DirtlineThrottle", handleControl, false, 3000,
-	Enum.KeyCode.W, Enum.KeyCode.S, Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonX)
-ContextActionService:BindActionAtPriority("DirtlineSteer", handleControl, false, 3000,
-	Enum.KeyCode.A, Enum.KeyCode.D, Enum.KeyCode.Left, Enum.KeyCode.Right, Enum.KeyCode.Thumbstick1)
-ContextActionService:BindActionAtPriority("DirtlineBrake", handleControl, false, 3000,
-	Enum.KeyCode.Space, Enum.KeyCode.ButtonL2)
-ContextActionService:BindActionAtPriority("DirtlineReset", handleControl, false, 3000,
-	Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+local controlKeys = {
+	Enum.KeyCode.W, Enum.KeyCode.Space, Enum.KeyCode.S, Enum.KeyCode.LeftShift, Enum.KeyCode.V, Enum.KeyCode.B,
+	Enum.KeyCode.A, Enum.KeyCode.D, Enum.KeyCode.Z, Enum.KeyCode.X,
+	Enum.KeyCode.I, Enum.KeyCode.K, Enum.KeyCode.J, Enum.KeyCode.L,
+	Enum.KeyCode.C, Enum.KeyCode.F, Enum.KeyCode.Q, Enum.KeyCode.E,
+	Enum.KeyCode.R, Enum.KeyCode.T, Enum.KeyCode.H, Enum.KeyCode.U,
+	Enum.KeyCode.Thumbstick1, Enum.KeyCode.Thumbstick2,
+	Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonL2, Enum.KeyCode.ButtonR1, Enum.KeyCode.ButtonL1,
+	Enum.KeyCode.DPadLeft, Enum.KeyCode.DPadRight, Enum.KeyCode.DPadDown, Enum.KeyCode.DPadUp,
+	Enum.KeyCode.ButtonA, Enum.KeyCode.ButtonX, Enum.KeyCode.ButtonY, Enum.KeyCode.ButtonL3, Enum.KeyCode.ButtonR3,
+}
 
-local touchLayer = create("Frame", gui, {
-	Name = "TouchControls",
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	Visible = false,
-}) :: Frame
-
-local function touchButton(action: string, text: string, position: UDim2, anchor: Vector2)
-	touchHeld[action] = {}
-	local button = create("TextButton", touchLayer, {
-		Name = action,
-		Position = position,
-		Size = UDim2.fromOffset(64, 64),
-		AnchorPoint = anchor,
-		BackgroundColor3 = colors.panel,
-		BackgroundTransparency = 0.12,
-		BorderSizePixel = 0,
-		AutoButtonColor = false,
-		Text = text,
-		Font = Enum.Font.GothamBold,
-		TextSize = 11,
-		TextColor3 = if action == "gas" then colors.teal else colors.text,
-	}) :: TextButton
-	corner(button, 16)
-	create("UIStroke", button, { Color = colors.border, Transparency = 0.25, Thickness = 1 })
-	table.insert(touchButtons, button)
-	button.InputBegan:Connect(function(input: InputObject)
-		if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and canDrive() then
-			touchHeld[action][input] = true
-			button.BackgroundColor3 = colors.panelLight
-			dismissIntro()
-		end
-	end)
-	button.InputEnded:Connect(function(input: InputObject)
-		touchHeld[action][input] = nil
-		if not touchPressed(action) then
-			button.BackgroundColor3 = colors.panel
-		end
-	end)
+local function setBindings(enabled: boolean)
+	if bindingActive == enabled then return end
+	bindingActive = enabled
+	if enabled then
+		-- Right stick is body motion while mounted; mouse camera still works.
+		ContextActionService:BindActionAtPriority("DirtlineSimulation", handleControl, false, 3000, table.unpack(controlKeys))
+	else
+		ContextActionService:UnbindAction("DirtlineSimulation")
+	end
 end
-touchButton("left", "LEFT", UDim2.new(0, 16, 1, -16), Vector2.new(0, 1))
-touchButton("right", "RIGHT", UDim2.new(0, 88, 1, -16), Vector2.new(0, 1))
-touchButton("gas", "GAS", UDim2.new(1, -16, 1, -88), Vector2.new(1, 1))
-touchButton("brake", "BRAKE", UDim2.new(1, -16, 1, -16), Vector2.new(1, 1))
-touchButton("reverse", "BACK", UDim2.new(1, -88, 1, -16), Vector2.new(1, 1))
-
--- InputEnded is global so dragging a finger off a control cannot leave it held.
-UserInputService.InputEnded:Connect(function(input: InputObject)
-	for _, touches in pairs(touchHeld) do
-		touches[input] = nil
-	end
-	for _, button in ipairs(touchButtons) do
-		if not touchPressed(button.Name) then
-			button.BackgroundColor3 = colors.panel
-		end
-	end
-	heldKeys[input.KeyCode] = nil
-end)
-UserInputService.WindowFocusReleased:Connect(function()
-	focused = false
-	clearControls()
-end)
-UserInputService.WindowFocused:Connect(function()
-	focused = true
-end)
-UserInputService.TextBoxFocused:Connect(clearControls)
-GuiService.MenuOpened:Connect(function()
-	menuOpen = true
-	clearControls()
-end)
-GuiService.MenuClosed:Connect(function()
-	menuOpen = false
-end)
-UserInputService.GamepadDisconnected:Connect(clearControls)
 
 local function ownsSeat(seat: BasePart?): boolean
-	if seat == nil or not seat:IsA("VehicleSeat") or seat.Name ~= "DriverSeat" then
+	if seat == nil or not seat:IsA("Seat") or seat.Name ~= "DriverSeat" then
 		return false
 	end
 	local ancestor: Instance? = seat
 	while ancestor and ancestor ~= workspace do
 		if ancestor:GetAttribute("OwnerUserId") == player.UserId then
+			ownedBike = ancestor
 			return true
 		end
 		ancestor = ancestor.Parent
@@ -1555,139 +3031,129 @@ local function updateSeat(humanoid: Humanoid)
 	if seated ~= nextSeated then
 		seated = nextSeated
 		clearControls()
+		setBindings(seated)
 	end
-	touchLayer.Visible = seated and UserInputService.TouchEnabled
 end
 
 local characterConnections: { RBXScriptConnection } = {}
 local function watchCharacter(character: Model)
-	for _, connection in ipairs(characterConnections) do
-		connection:Disconnect()
-	end
+	for _, connection in ipairs(characterConnections) do connection:Disconnect() end
 	table.clear(characterConnections)
 	seated = false
-	touchLayer.Visible = false
+	setBindings(false)
 	clearControls()
 	local humanoid = character:WaitForChild("Humanoid", 10)
-	if humanoid == nil or not humanoid:IsA("Humanoid") or player.Character ~= character then
-		return
-	end
-	table.insert(characterConnections, humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
-		updateSeat(humanoid)
-	end))
-	table.insert(characterConnections, humanoid.Died:Connect(function()
-		updateSeat(humanoid)
-	end))
+	if humanoid == nil or not humanoid:IsA("Humanoid") or player.Character ~= character then return end
+	table.insert(characterConnections, humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function() updateSeat(humanoid) end))
+	table.insert(characterConnections, humanoid.Died:Connect(function() updateSeat(humanoid) end))
 	updateSeat(humanoid)
 end
 player.CharacterAdded:Connect(watchCharacter)
-if player.Character then
-	task.spawn(watchCharacter, player.Character)
-end
+if player.Character then task.spawn(watchCharacter, player.Character) end
+
+UserInputService.InputEnded:Connect(function(input: InputObject)
+	heldKeys[input.KeyCode] = nil
+end)
+UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+	-- Recovery remains reachable after a crash ejects the rider; normal riding
+	-- actions are only bound while seated in the player's own plain Seat.
+	if processed or seated or not canAct() or ownedBike == nil then return end
+	if input.KeyCode == Enum.KeyCode.R or input.KeyCode == Enum.KeyCode.ButtonY then
+		resetBike()
+	elseif input.KeyCode == Enum.KeyCode.H or input.KeyCode == Enum.KeyCode.ButtonR3 then
+		toggleHelp()
+	elseif input.KeyCode == Enum.KeyCode.U then
+		toggleTuning()
+	end
+end)
+UserInputService.WindowFocusReleased:Connect(function() focused = false; clearControls() end)
+UserInputService.WindowFocused:Connect(function() focused = true end)
+UserInputService.TextBoxFocused:Connect(clearControls)
+GuiService.MenuOpened:Connect(function() menuOpen = true; clearControls() end)
+GuiService.MenuClosed:Connect(function() menuOpen = false end)
+UserInputService.GamepadDisconnected:Connect(clearControls)
 
 local function layout()
 	local camera = workspace.CurrentCamera
 	local viewport = if camera then camera.ViewportSize else Vector2.new(1280, 720)
-	local scale = math.clamp(math.min(viewport.X / 1120, viewport.Y / 690), 0.56, 1)
-	for _, panelScale in ipairs(panelScales) do
-		panelScale.Scale = scale
-	end
-	status.Position = UDim2.new(0.5, 0, 0, 16 + 108 * scale + 12)
-	local mobile = UserInputService.TouchEnabled
-	touchLayer.Visible = seated and mobile
-	local compact = viewport.X < 930 or mobile
-	controlsPanel.Visible = not compact
-	progressPanel.AnchorPoint = if compact then Vector2.new(1, 1) else Vector2.new(0.5, 1)
-	progressPanel.Position = if compact then UDim2.new(1, -16, 1, if mobile then -165 else -16) else UDim2.new(0.5, 0, 1, -16)
-	progressPanel.Size = UDim2.fromOffset(if viewport.X < 500 then 260 else 330, 90)
-	speedPanel.Position = UDim2.new(0, 16, 1, if mobile then -165 else -16)
-	resetButton.Text = if mobile then "RESET BIKE / RESTART LAP" else "R  /  Y     RESET BIKE"
-	if mobile then
-		introControls.Text = "LEFT / RIGHT  Steer   GAS  Accelerate\nBRAKE  Slow down   BACK  Reverse"
-	elseif UserInputService.GamepadEnabled then
-		introControls.Text = "Left stick  Steer   RT  Gas   LT  Brake\nX  Reverse   Y  Reset bike / restart lap"
-		controlsLabel.Text = "Left stick  Steer   RT  Gas   LT  Brake\nX  Reverse   Y  Reset bike"
-	else
-		introControls.Text = "W / S  Gas / reverse   A / D  Steer\nSPACE  Brake   R  Reset bike / restart lap"
-	end
+	local scale = math.clamp(math.min(viewport.X / 1180, viewport.Y / 730), 0.44, 1)
+	for _, panelScale in ipairs(panelScales) do panelScale.Scale = scale end
+	status.Position = UDim2.new(0.5, 0, 0, 16 + 116 * scale + 12)
+	local compact = viewport.X < 1050
+	progressPanel.AnchorPoint = if compact then Vector2.new(1, 0) else Vector2.new(0.5, 1)
+	progressPanel.Position = if compact then UDim2.new(1, -16, 0, 16 + 116 * scale + 12) else UDim2.new(0.5, 0, 1, -16)
+	if compact then status.Position = UDim2.new(0.5, 0, 0, 16 + 218 * scale + 12) end
+	mobileNotice.Visible = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled and not UserInputService.GamepadEnabled
 end
 local viewportConnection: RBXScriptConnection? = nil
 local function watchCamera()
-	if viewportConnection then
-		viewportConnection:Disconnect()
-	end
+	if viewportConnection then viewportConnection:Disconnect() end
 	local camera = workspace.CurrentCamera
-	if camera then
-		viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(layout)
-	end
+	if camera then viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(layout) end
 	layout()
 end
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchCamera)
 UserInputService:GetPropertyChangedSignal("TouchEnabled"):Connect(layout)
 UserInputService.GamepadConnected:Connect(layout)
+UserInputService.GamepadDisconnected:Connect(layout)
 watchCamera()
 
 local race = {
-	speed = 0,
-	lap = 1,
-	nextCheckpoint = 1,
-	checkpointCount = 1,
-	lapTime = 0,
-	bestLap = nil :: number?,
-	lapsFinished = 0,
-	racing = false,
+	speed = 0, lap = 1, nextCheckpoint = 1, checkpointCount = 1, lapTime = 0,
+	bestLap = nil :: number?, lapsFinished = 0, racing = false,
+}
+local physics: { [string]: any } = {
+	rpm = 0, gear = 0, clutch = 1, frontCompression = 0, rearCompression = 0,
+	frontSlip = 0, rearSlip = 0, roll = 0, pitch = 0, grounded = false,
+	crashed = false, crashReason = "", standing = false, footDown = true, stalled = false, setupVersion = 0, recoveryRemaining = 0, surfaceFront = "dirt", surfaceRear = "dirt",
 }
 local receivedAt = os.clock()
-local eventMessage = ""
-local eventMessageUntil = 0
+local physicsReceivedAt = os.clock()
+local eventMessage, eventMessageUntil = "", 0
+local lastSetupVersion = 0
 
 local function finite(value: any): boolean
 	return type(value) == "number" and value == value and math.abs(value) < 1e9
 end
-
 local function timeText(seconds: number): string
 	local hundredths = math.floor(math.max(seconds, 0) * 100)
 	return string.format("%02d:%02d.%02d", math.floor(hundredths / 6000), math.floor(hundredths / 100) % 60, hundredths % 100)
 end
 
 stateRemote.OnClientEvent:Connect(function(snapshot: any)
-	if type(snapshot) ~= "table" then
-		return
-	end
-	if finite(snapshot.speed) then
-		race.speed = math.clamp(snapshot.speed, 0, 500)
-	end
-	if finite(snapshot.lap) then
-		race.lap = math.clamp(math.floor(snapshot.lap), 1, 99999)
-	end
-	if finite(snapshot.checkpointCount) then
-		race.checkpointCount = math.clamp(math.floor(snapshot.checkpointCount), 1, 999)
-	end
-	if finite(snapshot.nextCheckpoint) then
-		race.nextCheckpoint = math.clamp(math.floor(snapshot.nextCheckpoint), 1, race.checkpointCount)
-	end
-	if finite(snapshot.lapTime) then
-		race.lapTime = math.clamp(snapshot.lapTime, 0, 86400)
-		receivedAt = os.clock()
-	end
-	if finite(snapshot.bestLap) and snapshot.bestLap > 0 then
-		race.bestLap = math.clamp(snapshot.bestLap, 0, 86400)
-	end
-	if finite(snapshot.lapsFinished) then
-		race.lapsFinished = math.clamp(math.floor(snapshot.lapsFinished), 0, 99999)
-	end
-	if type(snapshot.racing) == "boolean" then
-		race.racing = snapshot.racing
-	end
+	if type(snapshot) ~= "table" then return end
+	if finite(snapshot.speed) then race.speed = math.clamp(snapshot.speed, 0, 500) end
+	if finite(snapshot.lap) then race.lap = math.clamp(math.floor(snapshot.lap), 1, 99999) end
+	if finite(snapshot.checkpointCount) then race.checkpointCount = math.clamp(math.floor(snapshot.checkpointCount), 1, 999) end
+	if finite(snapshot.nextCheckpoint) then race.nextCheckpoint = math.clamp(math.floor(snapshot.nextCheckpoint), 1, race.checkpointCount) end
+	if finite(snapshot.lapTime) then race.lapTime = math.clamp(snapshot.lapTime, 0, 86400); receivedAt = os.clock() end
+	if finite(snapshot.bestLap) and snapshot.bestLap > 0 then race.bestLap = math.clamp(snapshot.bestLap, 0, 86400) end
+	if finite(snapshot.lapsFinished) then race.lapsFinished = math.clamp(math.floor(snapshot.lapsFinished), 0, 99999) end
+	if type(snapshot.racing) == "boolean" then race.racing = snapshot.racing end
 	if type(snapshot.message) == "string" and snapshot.message ~= "" then
-		local message = string.sub(snapshot.message, 1, 100)
-		if eventMessage ~= message then
-			eventMessage = message
-			eventMessageUntil = os.clock() + 3
-		end
+		local message = string.sub(snapshot.message, 1, 120)
+		if eventMessage ~= message then eventMessage = message; eventMessageUntil = os.clock() + 4 end
+		if tuning.Visible then setupStatus.Text = message end
 	elseif snapshot.message == nil then
-		eventMessage = ""
-		eventMessageUntil = 0
+		eventMessage, eventMessageUntil = "", 0
+	end
+	if type(snapshot.physics) == "table" then
+		local source = snapshot.physics
+		physicsReceivedAt = os.clock()
+		for _, field in ipairs({ "rpm", "gear", "clutch", "frontCompression", "rearCompression", "frontSlip", "rearSlip", "roll", "pitch", "setupVersion", "recoveryRemaining" }) do
+			if finite(source[field]) then physics[field] = source[field] end
+		end
+		for _, field in ipairs({ "grounded", "crashed", "standing", "footDown", "stalled" }) do
+			if type(source[field]) == "boolean" then physics[field] = source[field] end
+		end
+		if type(source.crashReason) == "string" then physics.crashReason = string.sub(source.crashReason, 1, 90) end
+		for _, field in ipairs({ "surfaceFront", "surfaceRear" }) do
+			if type(source[field]) == "string" then physics[field] = string.sub(source[field], 1, 16) end
+		end
+		if physics.setupVersion ~= lastSetupVersion then
+			lastSetupVersion = physics.setupVersion
+			setupStatus.Text = string.format("Server confirmed setup version %d.", math.floor(lastSetupVersion))
+		end
 	end
 	lapLabel.Text = string.format("LAP %02d", race.lap)
 	gateLabel.Text = if race.racing and race.nextCheckpoint == 1 then "NEXT GATE  START / FINISH" else string.format("NEXT GATE  %02d / %02d", race.nextCheckpoint, race.checkpointCount)
@@ -1696,36 +3162,176 @@ stateRemote.OnClientEvent:Connect(function(snapshot: any)
 	bestLabel.Text = "BEST    " .. (if race.bestLap then timeText(race.bestLap) else "--:--.--")
 end)
 
+local function pressed(key: Enum.KeyCode): number
+	return if heldKeys[key] then 1 else 0
+end
+local function approach(value: number, target: number, rate: number, deltaTime: number): number
+	local step = rate * deltaTime
+	return value + math.clamp(target - value, -step, step)
+end
+local function controls(): { [string]: any }
+	return {
+		throttle = math.max(keyboardThrottle, triggerThrottle),
+		frontBrake = math.max(keyboardFrontBrake, triggerFrontBrake),
+		rearBrake = math.max(keyboardRearBrake, pressed(Enum.KeyCode.ButtonR1)),
+		clutch = if safetyClutch or heldKeys[Enum.KeyCode.LeftShift] or heldKeys[Enum.KeyCode.ButtonL1] then 1 else (if gamepadMode then gamepadClutch else manualClutch),
+		steer = math.clamp(pressed(Enum.KeyCode.D) - pressed(Enum.KeyCode.A) + steerStick, -1, 1),
+		lean = math.clamp(pressed(Enum.KeyCode.X) + pressed(Enum.KeyCode.DPadRight) - pressed(Enum.KeyCode.Z) - pressed(Enum.KeyCode.DPadLeft), -1, 1),
+		bodyForward = math.clamp(pressed(Enum.KeyCode.I) - pressed(Enum.KeyCode.K) + bodyForwardStick, -1, 1),
+		bodySide = math.clamp(pressed(Enum.KeyCode.L) - pressed(Enum.KeyCode.J) + bodySideStick, -1, 1),
+		standing = standing, footDown = footDown,
+		shift = if #pendingShifts > 0 then table.remove(pendingShifts, 1) else 0,
+	}
+end
+
 local sendAccumulator = 0
 local displayedSpeed = 0
 RunService.Heartbeat:Connect(function(deltaTime: number)
+	if canDrive() then
+		keyboardThrottle = approach(keyboardThrottle, pressed(Enum.KeyCode.W), if heldKeys[Enum.KeyCode.W] then 1.5 else 4, deltaTime)
+		keyboardFrontBrake = approach(keyboardFrontBrake, pressed(Enum.KeyCode.Space), 3, deltaTime)
+		keyboardRearBrake = approach(keyboardRearBrake, pressed(Enum.KeyCode.S), 3, deltaTime)
+		-- V/B directly position the clutch lever; no engine or traction state
+		-- changes their response. LB has a fixed physical release travel time.
+		manualClutch = math.clamp(manualClutch + (pressed(Enum.KeyCode.V) - pressed(Enum.KeyCode.B)) * 1.4 * deltaTime, 0, 1)
+		gamepadClutch = if safetyClutch or heldKeys[Enum.KeyCode.ButtonL1] then 1 else approach(gamepadClutch, 0, 1 / 0.6, deltaTime)
+	end
 	sendAccumulator += deltaTime
-	if sendAccumulator >= 1 / 15 then
-		sendAccumulator %= 1 / 15
-		if canDrive() then
-			local throttle, steer, brake = controls()
-			inputRemote:FireServer(throttle, steer, brake)
-		end
+	if sendAccumulator >= 1 / 30 then
+		sendAccumulator %= 1 / 30
+		if canDrive() then sendPacket(controls()) end
 	end
 end)
 
 RunService.RenderStepped:Connect(function(deltaTime: number)
 	displayedSpeed += (race.speed - displayedSpeed) * math.min(1, deltaTime * 9)
 	speedLabel.Text = tostring(math.floor(displayedSpeed + 0.5))
-	speedFill.Size = UDim2.fromScale(math.clamp(displayedSpeed / 120, 0, 1), 1)
-	-- Extrapolation is capped if updates stop, so a disconnected client cannot invent laps.
+	gearLabel.Text = if physics.gear == 0 then "N" else tostring(math.clamp(math.floor(physics.gear), 1, 5))
+	rpmLabel.Text = string.format("%d RPM", math.floor(math.clamp(physics.rpm, 0, 25000)))
+	rpmFill.Size = UDim2.fromScale(math.clamp(physics.rpm / bikeConfig.Drive.RedlineRPM, 0, 1), 1)
+	rpmFill.BackgroundColor3 = if physics.rpm > bikeConfig.Drive.RedlineRPM * 0.93 then colors.red else colors.orange
+	inputLabel.Text = string.format("CLUTCH %d%%  /  %s  /  FEET %s", math.floor(math.clamp(physics.clutch, 0, 1) * 100 + 0.5), if physics.standing then "STANDING" else "SEATED", if physics.footDown then "DOWN" else "UP")
+	travelLabel.Text = string.format("TRAVEL  F %d mm  /  R %d mm", math.floor(physics.frontCompression * 1000 + 0.5), math.floor(physics.rearCompression * 1000 + 0.5))
+	slipLabel.Text = string.format("SLIP  F %+.2f  /  R %+.2f  /  %s", physics.frontSlip, physics.rearSlip, string.upper(physics.surfaceRear))
+	attitudeLabel.Text = string.format("ROLL %+.0f°  /  PITCH %+.0f°  /  %s", math.deg(physics.roll), math.deg(physics.pitch), if physics.grounded then "GROUND" else "AIR")
+	-- Only display extrapolation: neither race state nor physics is predicted here.
 	local extrapolated = if race.racing then math.min(os.clock() - receivedAt, 1) else 0
 	timeLabel.Text = timeText(race.lapTime + extrapolated)
-	if os.clock() < eventMessageUntil then
+	statusLabel.TextColor3 = colors.teal
+	if physics.crashed then
+		statusLabel.TextColor3 = colors.red
+		statusLabel.Text = "CRASH  /  " .. string.upper(physics.crashReason)
+		local remaining = math.max(0, physics.recoveryRemaining - math.min(os.clock() - physicsReceivedAt, 1))
+		statusHint.Text = if remaining > 0 then string.format("Recover available in %.1f seconds.", remaining) else "Press R / Y to recover. Your current lap is invalid."
+	elseif physics.stalled then
+		statusLabel.TextColor3 = colors.orange
+		statusLabel.Text = "ENGINE STALLED"
+		statusHint.Text = "Pull the clutch (Left Shift / LB), then press T / left stick click to start."
+	elseif os.clock() < eventMessageUntil then
 		statusLabel.Text = eventMessage
+		statusHint.Text = "H: full controls   U: suspension setup   R / Y: recover"
 	elseif not seated then
-		statusLabel.Text = "RESET YOUR BIKE TO GET BACK ON TRACK"
-	elseif race.racing and race.nextCheckpoint == 1 then
-		statusLabel.Text = "CROSS START / FINISH TO COMPLETE YOUR LAP"
+		statusLabel.Text = "PRESS R / Y TO RECOVER YOUR MOTORCYCLE"
+		statusHint.Text = "Simulation riding requires a keyboard or controller."
+	elseif physics.gear == 0 then
+		statusLabel.Text = "NEUTRAL  /  SELECT FIRST GEAR"
+		statusHint.Text = "E / D-pad up selects first. B meters clutch out; V pulls in. LB releases over 0.6s."
 	elseif race.racing then
-		statusLabel.Text = string.format("LAP %02d  /  FOLLOW GATE %02d", race.lap, race.nextCheckpoint)
+		statusLabel.Text = if race.nextCheckpoint == 1 then "CROSS START / FINISH TO COMPLETE YOUR LAP" else string.format("LAP %02d  /  FOLLOW GATE %02d", race.lap, race.nextCheckpoint)
+		statusHint.Text = "Braking, lean and throttle share tire grip. Balance is your responsibility."
 	else
-		statusLabel.Text = "CROSS THE START GATE TO BEGIN"
+		statusLabel.Text = "PHYSICS LAB  /  CROSS THE START GATE TO BEGIN"
+		statusHint.Text = "Practice turns, bumps and jumps. Use H for the full manual controls."
+	end
+end)
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="LocalScript" referent="24">
+        <Properties>
+          <string name="Name">MotocrossRiderPose</string>
+          <string name="Source"><![CDATA[--!strict
+-- Presentation only. Physical rider ballast and rotor reactions live on the
+-- server. These joint poses cannot turn, pitch or stabilize the motorcycle.
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+type Rig = { character: Model, motors: { [string]: Motor6D }, applied: boolean }
+local rigs: { [Player]: Rig } = {}
+
+local function observe(player: Player, character: Model)
+	local rig: Rig = { character = character, motors = {}, applied = false }
+	rigs[player] = rig
+	local function remember(instance: Instance)
+		if instance:IsA("Motor6D") then
+			rig.motors[instance.Name] = instance
+		end
+	end
+	for _, instance in character:GetDescendants() do
+		remember(instance)
+	end
+	local connection: RBXScriptConnection? = nil
+	connection = character.DescendantAdded:Connect(remember)
+	character.Destroying:Once(function()
+		if connection then connection:Disconnect() end
+		if rigs[player] == rig then rigs[player] = nil end
+	end)
+end
+
+local function addPlayer(player: Player)
+	player.CharacterAdded:Connect(function(character) observe(player, character) end)
+	if player.Character then observe(player, player.Character) end
+end
+for _, player in Players:GetPlayers() do addPlayer(player) end
+Players.PlayerAdded:Connect(addPlayer)
+Players.PlayerRemoving:Connect(function(player) rigs[player] = nil end)
+
+local function axis(character: Model, name: string): number
+	local value = character:GetAttribute(name)
+	return if typeof(value) == "number" and value == value then math.clamp(value, -1, 1) else 0
+end
+
+local function pose(rig: Rig, name: string, x: number, y: number, z: number)
+	local motor = rig.motors[name]
+	if motor and motor.Parent then motor.Transform = CFrame.Angles(x, y, z) end
+end
+
+-- Animator updates Transform after PreAnimation. Apply prototype articulation
+-- just before simulation so it replaces the default seated posture locally.
+RunService.PreSimulation:Connect(function()
+	for _, rig in rigs do
+		local character = rig.character
+		if character:GetAttribute("MotocrossRiding") == true then
+			rig.applied = true
+			local standing = character:GetAttribute("MotocrossStanding") == true
+			local forward = axis(character, "MotocrossBodyForward")
+			local side = axis(character, "MotocrossBodySide")
+			local lean = axis(character, "MotocrossLean")
+			local hip = math.rad(if standing then 18 else 65)
+			local knee = math.rad(if standing then -30 else -82)
+			local torsoPitch = math.rad(10 + forward * 15)
+			local torsoRoll = math.rad(-side * 10 - lean * 6)
+			pose(rig, "Waist", torsoPitch, 0, torsoRoll)
+			pose(rig, "LeftHip", hip, 0, math.rad(-3))
+			pose(rig, "RightHip", hip, 0, math.rad(3))
+			pose(rig, "LeftKnee", knee, 0, 0)
+			pose(rig, "RightKnee", knee, 0, 0)
+			pose(rig, "LeftShoulder", math.rad(60 - forward * 8), 0, math.rad(-15))
+			pose(rig, "RightShoulder", math.rad(60 - forward * 8), 0, math.rad(15))
+			pose(rig, "LeftElbow", math.rad(20), 0, 0)
+			pose(rig, "RightElbow", math.rad(20), 0, 0)
+			-- R6 fallback; production hand/foot IK remains a separate asset task.
+			pose(rig, "RootJoint", torsoPitch, 0, torsoRoll)
+			pose(rig, "Left Hip", hip, 0, 0)
+			pose(rig, "Right Hip", hip, 0, 0)
+			pose(rig, "Left Shoulder", math.rad(60), 0, math.rad(-15))
+			pose(rig, "Right Shoulder", math.rad(60), 0, math.rad(15))
+		elseif rig.applied then
+			rig.applied = false
+			for _, motor in rig.motors do
+				if motor.Parent then motor.Transform = CFrame.identity end
+			end
+		end
 	end
 end)
 ]]></string>
@@ -1733,11 +3339,11 @@ end)
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="14">
+  <Item class="Workspace" referent="25">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="FallenPartsDestroyHeight">-100</float>
-      <float name="Gravity">196.2</float>
+      <float name="Gravity">35.035713</float>
       <bool name="NeedsPivotMigration">false</bool>
       <bool name="StreamingEnabled">false</bool>
     </Properties>

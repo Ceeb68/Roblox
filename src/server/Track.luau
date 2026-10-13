@@ -59,7 +59,7 @@ local function part(
 	result.Material = material
 	result.Anchored = true
 	result.CanCollide = if canCollide == nil then true else canCollide
-	result.CanTouch = false
+	result.CanTouch = result.CanCollide
 	result.TopSurface = Enum.SurfaceType.Smooth
 	result.BottomSurface = Enum.SurfaceType.Smooth
 	result.Parent = parent

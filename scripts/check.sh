@@ -4,8 +4,11 @@ cd -- "$(dirname -- "$0")/.."
 tools_dir="${ROBLOX_TOOLS_DIR:-/workspace/.roblox-tools}"
 export PATH="$tools_dir/bin:$PATH"
 
-luau tests/RaceRules.spec.luau
-luau-analyze src/shared/RaceRules.luau tests/RaceRules.spec.luau
+for suite in tests/*.spec.luau; do
+  luau "$suite"
+done
+mapfile -d '' pure_sources < <(rg --files --null src/shared tests -g '*.luau')
+luau-analyze "${pure_sources[@]}"
 while IFS= read -r -d '' source; do
   luau-compile "$source" > /dev/null
 done < <(rg --files --null src tests -g '*.luau')

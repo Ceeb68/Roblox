@@ -10,12 +10,13 @@
     },
     "StarterPlayer": {
       "StarterPlayerScripts": {
-        "MotocrossClient": { "$path": "src/client/main.client.luau" }
+        "MotocrossClient": { "$path": "src/client/main.client.luau" },
+        "MotocrossRiderPose": { "$path": "src/client/RiderPose.client.luau" }
       }
     },
     "Workspace": {
       "$properties": {
-        "Gravity": 196.2,
+        "Gravity": 35.035714285714285,
         "FallenPartsDestroyHeight": -100,
         "StreamingEnabled": false
       }

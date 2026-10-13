@@ -2,8 +2,9 @@
 
 return table.freeze({
 	GameName = "Dirtline MX",
-	StateInterval = 0.2,
+	Mode = "PhysicsLab",
+	StateInterval = 0.1,
 	ResetCooldown = 2,
-	ArenaLimit = 330,
+	ArenaLimit = 600,
 	OutOfBoundsY = -30,
 })
