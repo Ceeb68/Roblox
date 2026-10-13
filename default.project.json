@@ -1,0 +1,33 @@
+{
+  "name": "Dirtline MX",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Motocross": { "$path": "src/shared" }
+    },
+    "ServerScriptService": {
+      "Motocross": { "$path": "src/server" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "MotocrossClient": { "$path": "src/client/main.client.luau" }
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "Gravity": 196.2,
+        "FallenPartsDestroyHeight": -100,
+        "StreamingEnabled": false
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "ClockTime": 15,
+        "Brightness": 2.5,
+        "Ambient": [0.42, 0.45, 0.5],
+        "OutdoorAmbient": [0.6, 0.63, 0.68]
+      }
+    },
+    "SoundService": { "$properties": { "RespectFilteringEnabled": true } }
+  }
+}

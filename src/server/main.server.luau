@@ -1,0 +1,191 @@
+--!strict
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local shared = ReplicatedStorage:WaitForChild("Motocross")
+local Config = require(shared:WaitForChild("Config"))
+local RaceRules = require(shared:WaitForChild("RaceRules"))
+local Bikes = require(script.Parent:WaitForChild("Bikes"))
+local Track = require(script.Parent:WaitForChild("Track"))
+
+local world = Instance.new("Folder")
+world.Name = "DirtlineMX"
+world.Parent = workspace
+local track = Track.build(world)
+local bikes = Bikes.new(world)
+
+local remotes = Instance.new("Folder")
+remotes.Name = "Remotes"
+remotes.Parent = shared
+local function remote(name: string): RemoteEvent
+	local event = Instance.new("RemoteEvent")
+	event.Name = name
+	event.Parent = remotes
+	return event
+end
+local input = remote("Input")
+local action = remote("Action")
+local stateEvent = remote("State")
+
+type Rider = {
+	race: RaceRules.State,
+	slot: number,
+	lastPosition: Vector3?,
+	lastReset: number,
+	respawning: boolean,
+	message: string,
+	messageUntil: number,
+	laps: IntValue,
+	best: NumberValue,
+	characterConnection: RBXScriptConnection?,
+}
+local riders: { [Player]: Rider } = {}
+local nextSlot = 0
+
+local function setMessage(rider: Rider, text: string)
+	rider.message = text
+	rider.messageUntil = workspace:GetServerTimeNow() + 5
+end
+
+local function respawn(player: Player)
+	local rider = riders[player]
+	if not rider or not player.Character or not player.Character.Parent then
+		return
+	end
+	if rider.respawning then
+		return
+	end
+	rider.respawning = true
+	rider.lastReset = workspace:GetServerTimeNow()
+	rider.lastPosition = nil
+	RaceRules.reset(rider.race)
+	setMessage(rider, "Cross START / FINISH to start your lap")
+	bikes:spawn(player, track:spawnCFrame(rider.slot))
+	rider.respawning = false
+end
+
+local function addPlayer(player: Player)
+	if riders[player] then
+		return
+	end
+	nextSlot += 1
+	local leaderboard = Instance.new("Folder")
+	leaderboard.Name = "leaderstats"
+	leaderboard.Parent = player
+	local laps = Instance.new("IntValue")
+	laps.Name = "Laps"
+	laps.Parent = leaderboard
+	local best = Instance.new("NumberValue")
+	best.Name = "BestLap"
+	best.Parent = leaderboard
+	local rider: Rider = {
+		race = RaceRules.new(track.checkpointCount),
+		slot = (nextSlot - 1) % 8 + 1,
+		lastPosition = nil,
+		lastReset = -math.huge,
+		respawning = false,
+		message = "",
+		messageUntil = 0,
+		laps = laps,
+		best = best,
+		characterConnection = nil,
+	}
+	riders[player] = rider
+	rider.characterConnection = player.CharacterAdded:Connect(function()
+		task.defer(respawn, player)
+	end)
+	if player.Character then
+		task.defer(respawn, player)
+	end
+end
+
+input.OnServerEvent:Connect(function(player, throttle, steer, brake)
+	-- Bikes verifies argument types, rates, range and ownership of the occupied seat.
+	bikes:input(player, throttle, steer, brake)
+end)
+
+action.OnServerEvent:Connect(function(player, command)
+	if command ~= "Respawn" then
+		return
+	end
+	local rider = riders[player]
+	if rider and not rider.respawning and workspace:GetServerTimeNow() - rider.lastReset >= Config.ResetCooldown then
+		task.defer(respawn, player)
+	end
+end)
+
+Players.PlayerAdded:Connect(addPlayer)
+Players.PlayerRemoving:Connect(function(player)
+	local rider = riders[player]
+	if rider and rider.characterConnection then
+		rider.characterConnection:Disconnect()
+	end
+	bikes:remove(player)
+	riders[player] = nil
+end)
+for _, player in Players:GetPlayers() do
+	addPlayer(player)
+end
+
+local sinceSnapshot = 0
+RunService.Heartbeat:Connect(function(dt)
+	bikes:update(dt)
+	sinceSnapshot += dt
+	local publish = sinceSnapshot >= Config.StateInterval
+	if publish then
+		sinceSnapshot %= Config.StateInterval
+	end
+	local now = workspace:GetServerTimeNow()
+	for player, rider in riders do
+		local position = bikes:getPosition(player)
+		if position and not rider.respawning then
+			if position.Y < Config.OutOfBoundsY or math.abs(position.X) > Config.ArenaLimit or math.abs(position.Z) > Config.ArenaLimit then
+				if now - rider.lastReset >= Config.ResetCooldown then
+					task.defer(respawn, player)
+				end
+			elseif bikes:isRiding(player) then
+				local previous = rider.lastPosition
+				if previous then
+					local gate = track.gates[rider.race.nextCheckpoint]
+					local before = gate.cframe:PointToObjectSpace(previous)
+					local after = gate.cframe:PointToObjectSpace(position)
+					if RaceRules.crossedGate(
+						{ x = before.X, y = before.Y, z = before.Z },
+						{ x = after.X, y = after.Y, z = after.Z },
+						gate.width
+					) then
+						local accepted, completed = RaceRules.cross(rider.race, rider.race.nextCheckpoint, now)
+						if accepted then
+							if completed then
+								rider.laps.Value = rider.race.lapsFinished
+								rider.best.Value = math.floor((rider.race.bestLap or 0) * 100) / 100
+								setMessage(rider, string.format("LAP COMPLETE  %.2fs  —  keep riding!", completed))
+							elseif rider.race.nextCheckpoint == 2 then
+								setMessage(rider, "Lap started — follow the numbered gates")
+							else
+								setMessage(rider, string.format("Gate cleared — next gate %d", rider.race.nextCheckpoint))
+							end
+						end
+					end
+				end
+				rider.lastPosition = position
+			else
+				rider.lastPosition = nil
+			end
+		end
+		if publish then
+			stateEvent:FireClient(player, {
+				speed = bikes:getSpeed(player),
+				lap = rider.race.lap,
+				nextCheckpoint = rider.race.nextCheckpoint,
+				checkpointCount = rider.race.checkpointCount,
+				lapTime = if rider.race.lapStart then now - rider.race.lapStart else 0,
+				bestLap = rider.race.bestLap,
+				lapsFinished = rider.race.lapsFinished,
+				racing = rider.race.lapStart ~= nil,
+				message = if now < rider.messageUntil then rider.message else nil,
+			})
+		end
+	end
+end)
