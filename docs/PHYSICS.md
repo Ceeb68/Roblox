@@ -1,5 +1,7 @@
 # 250F simulation architecture
 
+> Archived Roblox physics notes. The standalone game uses native wheel bodies, mechanical joints and its own Godot integration; see [standalone documentation](../standalone/README.md).
+
 This replaces target-speed arcade control with contact forces and an unrestricted chassis. It is an experimental motorcycle model, not a verified MX Bikes physics port.
 
 ## Units and mass

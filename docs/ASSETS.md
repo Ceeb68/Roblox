@@ -1,5 +1,7 @@
 # Motorcycle and rider asset pipeline
 
+> This pipeline was written for the earlier Roblox prototype. Active source is now under [standalone](../standalone/README.md); the need for original production models, rider work and properly licensed audio remains.
+
 The current DL-MX 250F uses procedural parts as a physics prototype. No production motorcycle mesh, licensed manufacturer branding, engine recording or finished rider animation has been imported.
 
 For the first production bike, commission or license one coherent 250F mesh set with documented ownership/export rights. Original fictional branding avoids implying authorization from a motorcycle manufacturer. Keep a per-asset source/license record before upload to Roblox.

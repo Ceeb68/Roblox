@@ -1,0 +1,49 @@
+DIRTLINE MX / WINDOWS PC / 0.1.0
+
+Extract the entire ZIP, then double-click DirtlineMX.exe.
+Keep DirtlineMX.pck in the same folder as the executable.
+No Roblox account, Roblox Studio or Godot editor is needed to play.
+
+STARTING THE BIKE
+Click LET'S RIDE.
+The engine starts in neutral, with the clutch pulled and feet down.
+Press E for first gear.
+Hold W to build revs, then hold B to release the clutch gradually.
+Press F to raise your feet once moving.
+If you stall: hold V or Shift to pull the clutch, then press T to restart.
+
+KEYBOARD
+W = progressive throttle
+Space = front brake; S = rear brake
+V = pull clutch; B = meter release; Shift = quick pull
+Q / E = shift down / up
+A / D = handlebar steering; Z / X = lean
+I / K = rider forward / back; J / L = rider left / right
+C = standing / seated; F = feet down / up
+R = manual recovery (after crash cooldown); T = engine starter
+H = controls; U = parked suspension setup; Escape = pause
+Hold right mouse = orbit camera; mouse wheel = camera distance
+
+CONTROLLER (XBOX-STYLE)
+RT = throttle; LT = front brake; RB = rear brake
+LB = pull clutch, release it progressively to engage
+Left stick = steering; right stick = rider positioning
+D-pad left / right = lean; down / up = gears
+A = standing / seated; X = feet; Y = recovery
+Left stick click = starter; right stick click = help; Start = pause
+
+THE PROVING GROUND
+Practice on flat ground, then try the numbered lab stations:
+braking bumps, whoops, banked berms, ruts, tabletop, large jump and grip pads.
+Pass track gates in order to time a local lap. Recovery cancels that lap.
+U opens spring, compression/rebound damping and preload settings while parked.
+
+This is an early physics prototype. Handling, human obstacle acceptance and
+production artwork are still being developed. PC/controller mappings are
+implemented; Windows desktop execution and controller hardware need player
+testing. MX Bikes is a target for simulation depth, not a replication claim.
+
+Source, validation and development notes:
+https://github.com/Ceeb68/Roblox/tree/main/standalone
+
+Godot and bundled third-party licenses: THIRD_PARTY_NOTICES.txt

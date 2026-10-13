@@ -1,5 +1,7 @@
 # Development assessment and roadmap
 
+> Archived Roblox prototype notes. Active development moved to the standalone Godot game; see [standalone documentation](../standalone/README.md) and [native validation](../standalone/VALIDATION.md). The Roblox evidence below describes the earlier version.
+
 ## What existed before the simulation update
 
 The initial `5fcc106` commit contains a procedural dirt circuit, an original orange/teal part-built bike, arcade force controls, automatic upright orientation, a race HUD, ordered checkpoint and lap validation, session best times, input ownership checks, a Rojo build, and 19 race-rule tests. It has no measured motorcycle data, production meshes or sounds, persistent progression, career, economy, purchases, AI, lobbies, or professional track collection. Its source/build checks passed; Roblox engine behavior was never verified here.

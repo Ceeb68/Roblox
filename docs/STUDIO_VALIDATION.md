@@ -1,5 +1,7 @@
 # Required Roblox Studio physics acceptance
 
+> Archived Roblox acceptance checklist. The active standalone game's evidence and remaining riding checks are in [native validation](../standalone/VALIDATION.md).
+
 Status: **not run**. This cloud task does not have Roblox Studio or its physics engine. Record actual observations and Output errors here; do not check a row because a script compiled.
 
 ## Repeatable setup
