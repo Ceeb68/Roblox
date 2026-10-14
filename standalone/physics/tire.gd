@@ -33,8 +33,14 @@ static func evaluate(state: Dictionary, input: Dictionary, cfg: Dictionary, surf
 		var capacity: float = grip * load
 		if capacity > 0.0:
 			var demand_x: float = load * maxf(_finite(float(cfg.LongitudinalStiffness), 0.0), 0.0) * _finite(float(state.slipRatio), 0.0)
+			# Camber thrust comes from transported/deformed tread, rather than an
+			# external sideways support force on a stationary tilted wheel. Fade
+			# only that term at walking speeds; remembered slip strain and the
+			# combined friction budget still use their original brush equations.
+			var transport: float = maxf(absf(wheel_speed), absf(_finite(float(input.longitudinalVelocity), 0.0)))
+			var camber_transport := smoothstep(0.0, minimum_speed, transport)
 			# Positive camber leans to wheel-right; lateral slip opposes that motion.
-			var demand_y: float = load * (-maxf(_finite(float(cfg.LateralStiffness), 0.0), 0.0) * _finite(float(state.slipAngle), 0.0) + maxf(_finite(float(cfg.CamberStiffness), 0.0), 0.0) * sin(_finite(float(input.get("camber", 0.0)), 0.0)))
+			var demand_y: float = load * (-maxf(_finite(float(cfg.LateralStiffness), 0.0), 0.0) * _finite(float(state.slipAngle), 0.0) + maxf(_finite(float(cfg.CamberStiffness), 0.0), 0.0) * sin(_finite(float(input.get("camber", 0.0)), 0.0)) * camber_transport)
 			var demand: float = sqrt(demand_x * demand_x + demand_y * demand_y)
 			if demand > 0.0:
 				var brush_slip: float = clampf(demand / (3.0 * capacity), 0.0, 1.0)

@@ -8,6 +8,11 @@ var game: Node3D
 var failures: Array[String] = []
 var checks: int = 0
 var saved_files: Dictionary = {}
+var neutral_pelvis := Vector3.ZERO
+var neutral_head_rotation := Vector3.ZERO
+var neutral_frame_com := Vector3.ZERO
+var neutral_frame_inertia := Vector3.ZERO
+var neutral_rider_inertia := Vector3.ZERO
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -63,14 +68,14 @@ func _add_pad() -> void:
 	game.add_child(floor_body)
 
 func _place_fall_fixture(offset: Vector3 = Vector3.ZERO) -> void:
-	# All four bodies begin in a physically plausible tilted assembly, then
+	# All five bodies begin in a physically plausible tilted assembly, then
 	# the native solver determines whether, when and how it falls and crashes.
 	var spawn := Transform3D(Basis(Vector3.FORWARD, deg_to_rad(76.0)),
 		PAD_ORIGIN + offset + Vector3(0.0, 0.80, 0.0))
 	var bodies: Array[RigidBody3D] = [game.bike.chassis, game.bike.fork,
-		game.bike.front_wheel, game.bike.rear_wheel]
+		game.bike.front_wheel, game.bike.rear_wheel, game.bike.rider_body]
 	var positions: Array[Vector3] = [Vector3.ZERO, game.bike.HEAD,
-		game.bike.FRONT_AXLE, game.bike.REAR_AXLE]
+		game.bike.FRONT_AXLE, game.bike.REAR_AXLE, Vector3(0.0, 0.54, 0.09)]
 	for index: int in range(bodies.size()):
 		bodies[index].global_transform = spawn * Transform3D(Basis.IDENTITY, positions[index])
 		bodies[index].linear_velocity = Vector3(0.4, -0.8, 0.1)
@@ -88,7 +93,7 @@ func _wait_for_crash() -> bool:
 func _assert_reset(label: String, just_integrated: bool = false) -> void:
 	var telemetry: Dictionary = game.bike.get_telemetry()
 	var bodies: Array[RigidBody3D] = [game.bike.chassis, game.bike.fork,
-		game.bike.front_wheel, game.bike.rear_wheel]
+		game.bike.front_wheel, game.bike.rear_wheel, game.bike.rider_body]
 	var upright := true
 	var stationary := true
 	for body: RigidBody3D in bodies:
@@ -103,24 +108,19 @@ func _assert_reset(label: String, just_integrated: bool = false) -> void:
 		and is_equal_approx(float(game.rider_input.clutch), 1.0),
 		label + " remounts seated with both feet down and clutch pulled")
 	var rider_collision: CollisionShape3D = game.bike._rider_collision
-	_check(rider_collision.position.distance_to(Vector3(0.0, 0.54, 0.09)) < 0.0001
+	var rider_body: RigidBody3D = game.bike.rider_body
+	_check(rider_collision.get_parent() == rider_body and rider_collision.position.length() < 0.0001
 		and rider_collision.rotation.length() < 0.0001,
 		label + " immediately restores the physical rider capsule")
-	var mass_ratio: float = float(game.bike.config.RiderMass) / (float(game.bike.config.ChassisMass) + float(game.bike.config.RiderMass))
-	var expected_com := Vector3(0.0, -0.11, 0.04).lerp(Vector3(0.0, 0.54, 0.09), mass_ratio)
-	_check(game.bike.chassis.center_of_mass.distance_to(expected_com) < 0.0001,
-		label + " immediately resets rider centre of mass")
-	var separation := Vector3(0.0, 0.65, 0.05)
-	var reduced_mass: float = float(game.bike.config.ChassisMass) * mass_ratio
-	var expected_inertia := Vector3(21.0, 14.0, 5.8) + Vector3(
-		separation.y * separation.y + separation.z * separation.z,
-		separation.x * separation.x + separation.z * separation.z,
-		separation.x * separation.x + separation.y * separation.y) * reduced_mass
-	_check(game.bike.chassis.inertia.distance_to(expected_inertia) < 0.0001,
-		label + " immediately restores seated rider inertia")
+	_check(game.bike.chassis.center_of_mass.distance_to(neutral_frame_com) < 0.0001
+		and game.bike.chassis.to_local(rider_body.global_position).distance_to(Vector3(0.0, 0.54, 0.09)) < 0.001,
+		label + " immediately restores the real rider COM and fixed frame COM")
+	_check(game.bike.chassis.inertia.distance_to(neutral_frame_inertia) < 0.0001
+		and rider_body.inertia.distance_to(neutral_rider_inertia) < 0.0001,
+		label + " preserves separate frame and rider inertias")
 	var rider_visual: Node3D = game.bike._rider_visual
-	_check(rider_visual._pelvis.position.distance_to(Vector3(0.0, 0.335, 0.20)) < 0.0001
-		and rider_visual._head.rotation.length() < 0.0001,
+	_check(rider_visual._pelvis.position.distance_to(neutral_pelvis) < 0.0001
+		and rider_visual._head.rotation.distance_to(neutral_head_rotation) < 0.0001,
 		label + " immediately restores the seated visible rider")
 	_check(absf(float(game.bike._body_forward)) + absf(float(game.bike._body_side))
 		+ absf(float(game.bike._body_lean)) + absf(float(game.bike._standing))
@@ -181,6 +181,14 @@ func _run() -> void:
 	game = scene.instantiate() as Node3D
 	root.add_child(game)
 	await process_frame
+	# Capture a pristine neutral remount before the tests create shifted poses.
+	# Recovery must restore this pose, independent of cosmetic mesh dimensions.
+	game.bike.reset_bike(game.track.spawn, true)
+	neutral_pelvis = game.bike._rider_visual._pelvis.position
+	neutral_head_rotation = game.bike._rider_visual._head.rotation
+	neutral_frame_com = game.bike.chassis.center_of_mass
+	neutral_frame_inertia = game.bike.chassis.inertia
+	neutral_rider_inertia = game.bike.rider_body.inertia
 	_add_pad()
 	game.start_session()
 	game.bike.reset_bike(Transform3D(Basis.IDENTITY, PAD_ORIGIN + Vector3(0.0, 0.82, 0.0)))

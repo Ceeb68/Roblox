@@ -107,6 +107,8 @@ func _set_native_motion(velocity: Vector3, front_omega: float = 0.0, rear_omega:
 		body.sleeping = false
 	bike.front_wheel.angular_velocity = bike.front_wheel.global_basis.x * front_omega
 	bike.rear_wheel.angular_velocity = bike.rear_wheel.global_basis.x * rear_omega
+	bike.front_wheel.invalidate_load_history()
+	bike.rear_wheel.invalidate_load_history()
 
 func _set_pitched_bearing_motion(parent_rate: float, front_rate: float, rear_rate: float) -> void:
 	# Give constrained body centres the translation of a common rigid rotation;
@@ -120,6 +122,8 @@ func _set_pitched_bearing_motion(parent_rate: float, front_rate: float, rear_rat
 		body.sleeping = false
 	bike.front_wheel.angular_velocity = bike.front_wheel.global_basis.x * front_rate
 	bike.rear_wheel.angular_velocity = bike.rear_wheel.global_basis.x * rear_rate
+	bike.front_wheel.invalidate_load_history()
+	bike.rear_wheel.invalidate_load_history()
 
 func _native_mechanical_energy() -> float:
 	var result := 0.0
@@ -131,6 +135,22 @@ func _native_mechanical_energy() -> float:
 		result += 0.5 * body.mass * body.linear_velocity.length_squared() + rotation_energy + body.mass * 9.81 * com.y
 	return result
 
+func _system_center() -> Vector3:
+	var weighted := Vector3.ZERO
+	var total := 0.0
+	for body: RigidBody3D in _native_bodies(bike):
+		weighted += (body.global_transform * body.center_of_mass) * body.mass
+		total += body.mass
+	return weighted / total
+
+func _system_velocity() -> Vector3:
+	var weighted := Vector3.ZERO
+	var total := 0.0
+	for body: RigidBody3D in _native_bodies(bike):
+		weighted += body.linear_velocity * body.mass
+		total += body.mass
+	return weighted / total
+
 func _test_structure_and_settle() -> void:
 	await _new_bike()
 	var bodies := _native_bodies(bike)
@@ -138,9 +158,13 @@ func _test_structure_and_settle() -> void:
 	for body: RigidBody3D in bodies:
 		total_mass += body.mass
 		_check(not body.freeze, "Rigid bodies run native integration", str(body.name))
-	_check(bodies.size() == 4, "Four native chassis/fork/wheel bodies", str(bodies.size()))
+	_check(bodies.size() == 5, "Five native chassis/fork/wheel/rider bodies", str(bodies.size()))
 	_check(absf(total_mass - 187.0) < 0.01, "Physical bike+rider mass is 187 kg", str(total_mass))
-	_check(_native_joints(bike).size() >= 3, "Native constraints connect all four bodies")
+	_check(_native_joints(bike).size() >= 4, "Native constraints connect all five bodies")
+	_check(is_equal_approx(bike.chassis.mass, 94.0) and is_equal_approx(bike.rider_body.mass, 78.0),
+		"Separate native frame and rider retain physical masses without double counting")
+	_check(bike._rider_collision.get_parent() == bike.rider_body,
+		"Physical rider collision follows the independently moving rider")
 	_check(_wheel_has_native_volume(bike.front_wheel, 0.34), "Front tire has a full native collision volume")
 	_check(_wheel_has_native_volume(bike.rear_wheel, 0.33), "Rear tire has a full native collision volume")
 	await _advance(3.0)
@@ -369,16 +393,19 @@ func _test_airborne_dynamics() -> void:
 	await _new_bike(Vector3(0.0, 12.0, 0.0), tilt)
 	bike.set_controls({"clutch": 1.0, "footDown": false})
 	_set_native_motion(Vector3(0.0, 2.0, -7.0))
-	var start_y: float = bike.chassis.global_position.y
-	var start_z: float = bike.chassis.global_position.z
+	# Internal compliant rider motion may move the frame relative to the rider.
+	# Ballistics applies to the complete native system's COM, measured here
+	# independently from all five rigid bodies rather than the controller.
+	var start_y: float = _system_center().y
+	var start_z: float = _system_center().z
 	var start_roll: float = bike.get_telemetry().roll
 	await _advance(0.5)
 	var air: Dictionary = bike.get_telemetry()
 	var expected_y: float = start_y + 2.0 * 0.5 - 0.5 * 9.81 * 0.5 * 0.5
 	_check(not bool(air.frontContact) and not bool(air.rearContact), "Airborne wheels have no fabricated ground contact")
-	_check(absf(bike.chassis.linear_velocity.y - (2.0 - 9.81 * 0.5)) < 0.5, "Native flight velocity follows gravity", str(bike.chassis.linear_velocity))
-	_check(absf(bike.chassis.global_position.y - expected_y) < 0.25, "Native flight follows ballistic height", "expected %.3f actual %.3f" % [expected_y, bike.chassis.global_position.y])
-	_check(absf(bike.chassis.global_position.z - (start_z - 3.5)) < 0.25, "Airborne forward velocity is not replaced by a target speed")
+	_check(absf(_system_velocity().y - (2.0 - 9.81 * 0.5)) < 0.5, "Native system flight velocity follows gravity", str(_system_velocity()))
+	_check(absf(_system_center().y - expected_y) < 0.25, "Native system flight follows ballistic height", "expected %.3f actual %.3f" % [expected_y, _system_center().y])
+	_check(absf(_system_center().z - (start_z - 3.5)) < 0.25, "Airborne forward velocity is not replaced by a target speed")
 	_check(absf(float(air.roll) - start_roll) < 0.15, "Airborne neutral inputs preserve tilted attitude without automatic correction", "initial %.3f final %.3f" % [start_roll, air.roll])
 	bike.set_controls({"clutch": 1.0, "footDown": false, "bodySide": 1.0, "bodyForward": 1.0, "standing": true, "lean": 0.6})
 	await _advance(0.25)

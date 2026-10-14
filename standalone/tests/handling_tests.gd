@@ -18,6 +18,13 @@ func tick() -> void:
 func advance(seconds: float) -> void:
  for i in range(roundi(seconds * 240.0)):
   await tick()
+func sprung_com_in_frame() -> Vector3:
+ var weighted := Vector3.ZERO
+ var total := 0.0
+ for body: RigidBody3D in [bike.chassis, bike.rider_body]:
+  weighted += (body.global_transform * body.center_of_mass) * body.mass
+  total += body.mass
+ return bike.chassis.to_local(weighted / total)
 func make_bike(position: Vector3, basis: Basis = Basis.IDENTITY) -> void:
  if is_instance_valid(bike):
   bike.queue_free()
@@ -81,11 +88,17 @@ func run() -> void:
  check(absf(flight.riderTargetLean) < 0.00001 and absf(flight.headingCorrection) < 0.00001, "Virtual balancing and line intent are inactive airborne")
  check(absf(flight.roll - start_roll) < deg_to_rad(2.0), "No automatic airborne roll/landing correction changes a free attitude")
  check(absf(bike.chassis.linear_velocity.y + 4.905) < 0.35, "Airborne native centre accelerates under gravity")
- var old_com: Vector3 = bike.chassis.center_of_mass
- bike.set_controls({"bodySide": 0.8, "lean": 0.7, "standing": true})
+ var old_com: Vector3 = sprung_com_in_frame()
+ var old_frame_com: Vector3 = bike.chassis.center_of_mass
+ var old_frame_inertia: Vector3 = bike.chassis.inertia
+ bike.set_controls({"bodyForward": 0.65, "bodySide": 0.8, "lean": 0.7, "standing": true})
  await advance(0.8)
- check(bike.chassis.center_of_mass.x - old_com.x > 0.07, "Rider body input actually moves the combined physical COM")
- check(bike.chassis.center_of_mass.y - old_com.y > 0.07, "Standing posture actually raises the physical COM")
+ var moved_com: Vector3 = sprung_com_in_frame()
+ check(moved_com.x - old_com.x > 0.07, "Rider body input actually moves the combined physical COM relative to the bike")
+ check(moved_com.y - old_com.y > 0.07, "Standing posture actually raises the physical COM relative to the bike")
+ check(old_com.z - moved_com.z > 0.04, "Explicit fore/aft body input overrides the virtual reflex and moves physical COM")
+ check(bike.chassis.center_of_mass.is_equal_approx(old_frame_com) and bike.chassis.inertia.is_equal_approx(old_frame_inertia),
+  "Rider movement uses an actual native body instead of rewriting frame COM or inertia")
  check(absf(bike.get_telemetry().roll - start_roll) > 0.01, "Finite rider articulation reacts on airborne native chassis")
  check(bike.set_riding_mode("direct"), "Strict direct handlebar mode remains selectable")
  check(absf(bike._steering_integral) < 0.000001, "Mode change clears learned steering torque state")

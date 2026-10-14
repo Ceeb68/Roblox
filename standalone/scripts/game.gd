@@ -779,7 +779,7 @@ func _settings_content(content: VBoxContainer) -> void:
 			bike.set_riding_mode(riding_mode)
 		_save_preferences())
 	content.add_child(mode_select)
-	var mode_info: Label = _label("Lean control: command a lean; your rider countersteers and balances.\nDirect bars: you control steering effort and balance yourself. Crashes still matter.", 14, MUTED)
+	var mode_info: Label = _label("Lean control: your rider countersteers and braces over bumps.\nManual body positioning takes priority. Direct bars leaves balance to you.\nUse feet at a stop; excessive lean and poor landings can still crash.", 14, MUTED)
 	content.add_child(mode_info)
 	content.add_child(_button("Customize controller bindings", func() -> void: _show_modal("bindings")))
 	content.add_child(_label("CAMERA", 16, TEAL))

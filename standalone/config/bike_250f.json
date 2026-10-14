@@ -123,21 +123,21 @@
   },
   "Suspension": {
     "Front": {
-      "BumpRate": 140000,
-      "Compression": 1500,
+      "BumpRate": 400000,
+      "Compression": 850,
       "Preload": 0.012,
-      "Rebound": 2100,
+      "Rebound": 1800,
       "RestLength": 0.47,
-      "SpringRate": 18000,
+      "SpringRate": 9000,
       "Travel": 0.3
     },
     "Rear": {
-      "BumpRate": 155000,
-      "Compression": 1700,
+      "BumpRate": 450000,
+      "Compression": 900,
       "Preload": 0.014,
-      "Rebound": 2400,
+      "Rebound": 2700,
       "RestLength": 0.44,
-      "SpringRate": 19500,
+      "SpringRate": 9500,
       "Travel": 0.3
     }
   },
@@ -156,12 +156,24 @@
     "RollFrequency": 3.4,
     "RollDamping": 1.2,
     "BarStiffness": 600.0,
-    "BarDamping": 18.0,
+    "BarDamping": 25.0,
     "BarIntegral": 300.0,
     "MaxTorque": 45.0,
-    "MaintainHeading": true
+    "MaintainHeading": true,
+    "IntentResponse": 0.16,
+    "MaxLeanRate": 1.4,
+    "SlipResponse": 0.1,
+    "BarSpeedReference": 9.0,
+    "MaxBarBandwidth": 12.0,
+    "HighSpeedFrequency": 3.4,
+    "AirBarStiffness": 600.0,
+    "AirBarDamping": 25.0,
+    "HighSpeedBarDamping": 18.0,
+    "ContactPerceptionTime": 0.1,
+    "SeatedRollFrequency": 6.4,
+    "AccelerationBodyBrace": 0.65
   },
-  "Version": 2,
+  "Version": 3,
   "Wheelbase": 1.48,
   "PhysicsHz": 240,
   "Unsprung": {
@@ -169,5 +181,17 @@
     "RearMass": 7.5,
     "ForkMass": 2.0
   },
-  "ChassisMass": 94.0
+  "ChassisMass": 94.0,
+  "RiderSupport": {
+    "SideStiffness": 12000,
+    "SeatedVertical": 20000,
+    "StandingVertical": 5000,
+    "ForeStiffness": 4000,
+    "SideDamping": 1300,
+    "VerticalDamping": 350,
+    "ForeDamping": 200,
+    "MaxForce": 3500,
+    "PostureStiffness": 180,
+    "PostureDamping": 12
+  }
 }

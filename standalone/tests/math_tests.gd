@@ -56,6 +56,7 @@ func _initialize() -> void:
 	_test("combined braking and cornering share one friction budget", _friction_circle)
 	_test("independent axle load transfer changes grip without shared memory", _loads)
 	_test("camber thrust turns toward lean within grip capacity", _camber)
+	_test("camber thrust requires tread transport and fades continuously at rest", _camber_transport)
 	_test("airborne and unloaded tires produce no forces", _airborne_tire)
 	_test("near-rest and nonfinite inputs remain finite without launch force", _low_speed)
 	_test("contact relaxation builds over distance and converges across rates", _relaxation)
@@ -65,6 +66,7 @@ func _initialize() -> void:
 	_test("spring and preload settings visibly change support", _spring_settings)
 	_test("compression and rebound settings act independently", _damping)
 	_test("progressive bottom stop and penetration guard remain finite", _bottom)
+	_test("progressive rubber stop keeps its constitutive force with soft or absent main coils", _independent_rubber_stop)
 	_test("legacy contact suspension is inactive without ground", _airborne_suspension)
 	_test("articulated airborne spring extends and damper can pull", _articulated_airborne)
 	_test("articulated directional dampers dissipate mechanical work", _articulated_passive)
@@ -424,6 +426,31 @@ func _camber() -> void:
 	sample.camber = -float(sample.camber)
 	_near(float(_settled(sample).lateralForce), -float(positive.lateralForce), 1e-8, "Camber symmetry")
 
+func _camber_transport() -> void:
+	var sample: Dictionary = _sample(0.0, 0.0, 0.0)
+	sample.camber = deg_to_rad(30.0)
+	var state: Dictionary = Tire.new_state()
+	_near(float(Tire.evaluate(state, sample, bike.Tire, bike.Surfaces.dirt).lateralForce), 0.0, 0.0, "An unstrained stationary inclined tire has no rolling camber thrust")
+	var last_force := 0.0
+	for speed: float in [0.01, 0.10, 0.50, 1.0, float(bike.Tire.MinimumSpeed)]:
+		sample.longitudinalVelocity = speed
+		sample.wheelOmega = speed / float(sample.radius)
+		var output: Dictionary = Tire.evaluate(state, sample, bike.Tire, bike.Surfaces.dirt)
+		_check(float(output.lateralForce) > last_force, "Camber builds continuously with tread transport")
+		_check(_force(output) <= float(output.grip) * float(sample.normalLoad) + 1e-7, "Low-speed camber stays inside the original combined grip budget")
+		last_force = float(output.lateralForce)
+	var forward_force := last_force
+	sample.longitudinalVelocity = -float(sample.longitudinalVelocity)
+	sample.wheelOmega = -float(sample.wheelOmega)
+	_near(float(Tire.evaluate(state, sample, bike.Tire, bike.Surfaces.dirt).lateralForce), forward_force, 1e-8, "Reverse rolling retains the same camber force direction")
+	sample.longitudinalVelocity = 0.0
+	sample.wheelOmega = 0.0
+	state.slipAngle = 0.1
+	var inclined: Dictionary = Tire.evaluate(state, sample, bike.Tire, bike.Surfaces.dirt)
+	sample.camber = 0.0
+	var uncambered: Dictionary = Tire.evaluate(state, sample, bike.Tire, bike.Surfaces.dirt)
+	_near(float(inclined.lateralForce), float(uncambered.lateralForce), 1e-8, "Stopping camber transport does not erase existing lateral patch strain")
+
 func _airborne_tire() -> void:
 	var sample: Dictionary = _sample(20.0, 10.0, 100.0)
 	var state: Dictionary = Tire.new_state()
@@ -531,6 +558,25 @@ func _bottom() -> void:
 	_check(float(beyond.force) > float(bottom.force), "Overtravel stiffens progressively")
 	var extreme: Dictionary = Suspension.step(Suspension.new_state(), 1e6, 1e6, true, H, settings)
 	_check(is_finite(float(extreme.force)) and float(extreme.force) < 100000.0, "Penetration force bounded")
+
+func _independent_rubber_stop() -> void:
+	# The rubber end stop is independent of the main coil. A weak/broken coil
+	# must not numerically clip its force while the stop is being compressed.
+	for axle: String in ["Front", "Rear"]:
+		var original: Dictionary = bike.Suspension[axle]
+		var travel: float = float(original.Travel)
+		var compression := travel + 0.01
+		var bump_band := travel * 0.15
+		var rubber_compression := compression - (travel - bump_band)
+		var rubber_force := float(original.BumpRate) * rubber_compression ** 2 / bump_band
+		for spring_rate: float in [0.0, 1000.0, float(original.SpringRate)]:
+			var settings: Dictionary = original.duplicate(true)
+			settings.SpringRate = spring_rate
+			var expected := rubber_force + spring_rate * (compression + float(settings.Preload))
+			var contact: Dictionary = Suspension.step(Suspension.new_state(), compression, 0.0, true, H, settings)
+			var articulated: Dictionary = Suspension.step_articulated(Suspension.new_state(), compression, 0.0, H, settings)
+			_near(float(contact.force), expected, 1e-6, "%s contact rubber law at main coil %.0f N/m" % [axle, spring_rate])
+			_near(float(articulated.force), expected, 1e-6, "%s articulated rubber law at main coil %.0f N/m" % [axle, spring_rate])
 
 func _airborne_suspension() -> void:
 	var state: Dictionary = Suspension.new_state()

@@ -4,6 +4,10 @@ The cloud machine can execute the actual Linux Godot/Jolt engine and render the 
 
 ## Version 0.2 handling and player workflow
 
+This section records the previous release baseline. Version 0.3 results and the
+remaining rough-ground work are recorded below; the earlier measurements are
+not measurements of the current build.
+
 The default is now the user-selected virtual rider. Steering effort is physically bounded at 45 Nm and paired with the chassis; requested lean is capped by speed/geometry, surface grip and a 36° comfort limit. Neutral chosen-line corrections also act through those handlebars. Direct mode bypasses rider steering feedback. There are no chassis pose/position constraints or airborne landing corrections. The tire crown uses continuous native rounded-cylinder support, and tire slip includes non-spin patch transport. Brief sliding is recoverable; a washout requires actual departing lean rather than a single slip spike.
 
 New handling checks pass 18 assertions for bounded steering, unsupported stationary fall, actual rider movement, airborne gravity/attitude and camera anchoring. The independent playability suite passes 42 assertions: a 14-second keyboard/manual-shift run covers 256 m without crashing; maximum lateral drift over the first 100 m is 0.95 m with 0.28° heading change. Full steering in either direction holds about 25° bank for ten seconds at roughly 10.5 m/s, turning over 200° without wrong-side banking or falling. Separate moderate rider lean causes measurable banking in both directions, but some oscillation/asymmetry remains and needs rider feedback.
@@ -12,21 +16,106 @@ The real main-scene welcome button and E/W/B/F/Shift/E events support a five-sec
 
 Controller analog polling was tested through binding/routing mathematics; actual joystick hardware is unavailable. Synthetic button/axis commands exercise the game dispatcher, but do not establish controller hardware behavior. Windows execution also remains untested on Windows.
 
+## Version 0.3 stability and riding posture
+
+The virtual rider now filters requested bank without filtering the motorcycle's
+actual pose. Bank and heading rates are derivatives of their measured world
+angles, including pitched and yawed attitudes; a 30-check independent
+finite-difference suite guards against feeding pitch/yaw motion into roll damping.
+Finite steering torque remains paired between fork and chassis. Direct mode
+continues to bypass virtual-rider balance control.
+
+The softer fictional effective wheel rates are 9,000/9,500 N/m, with separately
+specified progressive rubber bump stops. Settled native sag is approximately
+68/87 mm. The force guard now includes the bump-stop rate, so reducing main
+spring stiffness does not silently clip landing support. The existing
+one-dimensional 12 m/s landing and convergence checks retain their limits.
+
+The contact adapter no longer sums repeated coplanar triangle responses as
+independent tire support. It keeps distinct normals/moving supports separate and
+reduces repeated geometric contact points without impulse-biased patch locations.
+The 262-check contact suite retains all 188 manifold/fallback checks and includes triangle/box comparisons, surface seams,
+banked support and 48 edge/contact ordering permutations. Reported Jolt impulses
+remain estimates rather than final coupled solver forces; this adapter does not
+change native collision support or add normal forces. The normal brush load now
+normally comes from completed wheel momentum along the free suspension axis,
+after subtracting gravity and recorded spring/tangent forces. Mechanical stops,
+near-axis singularities and missing samples use the explicit manifold fallback.
+This remains an inference in a finite-step constrained engine, not access to
+Jolt's final impulses.
+
+The procedural rider uses a forward hip hinge, raised elbows, bent knees, boot
+soles aligned to the pegs, and physical suspension/acceleration bracing. Hands and
+boots retain support targets through two-bone limb solving. An ignored geometry
+probe checked 108 combined input poses for limb reach. This improves the original
+procedural rider; it is not a scanned rider or a production animation library.
+The rider now has an independent 78 kg native body with compliant leg support,
+finite reach stops and paired common-point forces/torso torque. The 94 kg frame's
+COM and inertia stay fixed. The visible hip/torso/helmet follow the real body's
+motion; arms and legs re-solve to real grips/pegs within anatomical reach.
+Recovery compares the reset visual pose with a
+fresh neutral pose rather than a coordinate from the previous rider mesh.
+
+Standing coasting through the shipped whoops, seated/standing braking bumps,
+brief lean corrections, clutch recovery at low speed, separate mild braking,
+hardpack-to-mud transitions, an actual rut and a banked drop are exercised by the
+new native stability suite. Independent frozen production runs passed the
+original 68 checks and all 270 guards across 30 powered second-gear rides, with
+five rider positions (neutral and ±0.15/±0.25 fore/aft input), three nearby lines
+and two repeats. Gear two is selected through timed real shifting and verified;
+neither engine nor wheel speed is replaced during the ride. All 30 survived;
+maximum bank was about 10° and maximum final bank 7°. Standing coasting through the
+same shipped whoops covered 19.1 m in five seconds, with 13.1° maximum/final bank.
+The tracked suite retains every original guard and adds 14 representative powered
+repeats, for 194 checks over 26 rides. Full human obstacle acceptance remains open.
+
+The actual keyboard/manual-shift regression additionally verifies a fourteen-second
+full-throttle launch through fifth gear. Acceleration-driven front unloading asks
+the virtual rider to brace forward through the same finite native body support;
+manual endpoints retain priority. Seated and standing roll response use different
+gains because their compliant support differs. The target line, bank and crash
+limits in the existing playability suite remain unchanged. The final release run
+covered 256.4 m, reached 32.9 m/s and fifth gear, and stayed within 1.81 m of its
+chosen line over the first 100 m with 0.24° heading error.
+
+A new 40-check native rider-dynamics suite verifies actual per-body impulses and
+common-point torque pairing in three rotated configurations, fixed frame COM and
+inertia, real torso movement, total COM transport and bounded muscle forces. In
+its isolated coupled-system bench, peak world angular momentum drift is about
+1.71% at 240 Hz and 1.03% at 480 Hz. The new engineering bound is 2%; the earlier
+ignored 1% experiment remains a failed diagnostic, and the existing free-rotor
+bounds are unchanged. Trapezoidal internal force/torque work accounts for kinetic
+energy to within 1% in this bench. Its residual is not monotonically convergent;
+native joint dissipation remains an approximation. These bounds are specific
+bench results, not a claim of exact conservation in arbitrary riding.
+
+Accessible research and the blocked official MX Bikes sources are documented in
+[MX_BIKES_RESEARCH.md](MX_BIKES_RESEARCH.md). Our control gains, suspension rates,
+tire model and rider motion are independently developed.
+
 ## Automated workflow
 
 Version 0.2.1 adds 67 actual native recovery checks: genuine crash detection, one-second auto remount (paused menus freeze the timer), immediate R and mapped controller recovery, physical/visible rider pose, all body velocities, held-control protection, nearby ground/fallback, repeated crashes and reset-failure propagation. Invalid nonfinite poses are rejected without partial state changes. Chassis-only contact can record a fall even when both wheels are clear. Physics bodies apply remount poses inside their next native integration callback, and presentation/COM/inertia/collision reset immediately.
 
+The final version 0.3 release passed all 2,465 checks: 1,635 SI math, 50 gyro,
+40 rider dynamics, 81 native mechanical, 262 contact/load, 20 handling, 30 sensor,
+44 input/camera, 42 playability, 194 stability and 67 five-body recovery checks.
+The Windows ZIP passed integrity and current-export byte comparisons. Its exact
+project pack also loaded in a Linux release template, both headless and under
+software OpenGL; the native packaged Exit button shut it down cleanly. Windows
+desktop execution and real controller hardware remain untested here.
+
 Run `bash standalone/tools/check.sh`. Preserve command failures and engine error output. Export and package only the current passing revision with `bash standalone/tools/package_windows.sh`. The package verifies every shipped file against the current export and records its SHA-256 in `downloads/SHA256SUMS`.
 
-The SI math suite contains 43 regression cases and 1,610 checks for drivetrain momentum/energy, clutch/manual gears, losses, brakes, surface grip, the shared traction budget, tire relaxation, suspension damping and a one-dimensional hard-landing convergence scenario. These run the mathematical modules rather than a mock engine.
+The SI math suite contains 45 regression cases and 1,635 checks for drivetrain momentum/energy, clutch/manual gears, losses, brakes, surface grip, the shared traction budget, camber/contact transport, tire relaxation, suspension damping, independent bump-stop support and a one-dimensional hard-landing convergence scenario. These run the mathematical modules rather than a mock engine.
 
-The native scenario suite passes 78 checks using real rigid bodies, cylinder tires, joints and floor/ramp/track colliders. It tests mass, normal loads, static sag and tuning, neutral/clutch isolation, actual chassis acceleration, independent brakes, stall/restart, actual wheelspin, high-speed rotor limits, unassisted loss of balance, manual recovery, near-vertical wheel contact, ballistic flight, rider reactions, ramp takeoff and landing, and material tags on the shipped track. Moving-bearing brake benches require correct relative-spin reduction and declining native mechanical energy. A spinning front wheel must produce real steering/roll coupling in the assembled bike.
+The native scenario suite passes 81 checks using real rigid bodies, cylinder tires, joints and floor/ramp/track colliders. It tests mass, normal loads, static sag and tuning, neutral/clutch isolation, actual chassis acceleration, independent brakes, stall/restart, actual wheelspin, high-speed rotor limits, unassisted loss of balance, manual recovery, near-vertical wheel contact, ballistic flight, rider reactions, ramp takeoff and landing, and material tags on the shipped track. Moving-bearing brake benches require correct relative-spin reduction and declining native mechanical energy. A spinning front wheel must produce real steering/roll coupling in the assembled bike.
 
-The gyroscope suite passes 10 cases and 50 checks. It measures actual Jolt rigid bodies with explicit inertia. The uncorrected native baseline exhibits about 15.4% peak world-angular-momentum drift over 0.5 seconds. Implicit midpoint Euler correction limits peak drift to about 0.98% at 240 Hz for 30 and 100 rad/s rotors, falling to about 0.49% at 480 Hz. Maximum relative energy error stays below 0.001%. These are bounded test scenarios, not universal error guarantees. Constraint/contact integration and changing aggregate rider inertia still introduce additional approximation.
+The gyroscope suite passes 10 cases and 50 checks. It measures actual Jolt rigid bodies with explicit inertia. The uncorrected native baseline exhibits about 15.4% peak world-angular-momentum drift over 0.5 seconds. Implicit midpoint Euler correction limits peak drift to about 0.98% at 240 Hz for 30 and 100 rad/s rotors, falling to about 0.49% at 480 Hz. Maximum relative energy error stays below 0.001%. These are bounded test scenarios, not universal error guarantees. Constraint/contact integration and finite-step coupling still introduce additional approximation.
 
 The earlier course was checked with 1,070 profile/continuity rays and eight cylinder drops. Version 0.2 expands the course to a roughly 80 × 158 m loop, 10 m road, 30 m corners, a 40 m flat start, a separate 100 m practice straight and longer jump approaches/landings. Its fresh native geometry probes pass at the spawn, flat launch, obstacles, practice surfaces and retained grip pads. It has 14 static surface bodies and about 95,640 triangles. Exact triangle-edge rays can miss because of floating-point rounding; riding uses native wheel volume contact.
 
-Reported Jolt contact impulses are estimated collision responses rather than final joint-coupled solver impulses. Tire loads are therefore approximations; real native wheel geometry/contact supports the bike. See the [Godot 4.6.3 contact adapter](https://github.com/godotengine/godot/blob/4.6.3-stable/modules/jolt_physics/spaces/jolt_contact_listener_3d.cpp#L209).
+Reported Jolt contact impulses are estimated collision responses rather than final joint-coupled solver impulses. The free-slider momentum observation and explicit collision fallback are approximations; real native wheel geometry/contact supports the bike. See the [Godot 4.6.3 contact adapter](https://github.com/godotengine/godot/blob/4.6.3-stable/modules/jolt_physics/spaces/jolt_contact_listener_3d.cpp#L209).
 
 Native graphical checks exercise the main scene, welcome/help/setup screens and gameplay HUD at 1280×720. A parked U-input test changes front spring stiffness through the displayed SpinBox and verifies the bike receives the setup; an H-input test opens help. Audio synthesis is implemented, but the cloud machine has no physical sound output or controller hardware.
 
