@@ -17,10 +17,16 @@ run_check --headless --fixed-fps 240 --script res://tests/rider_dynamics_tests.g
 run_check --headless --fixed-fps 240 --script res://tests/native_scenarios.gd
 run_check --headless --fixed-fps 240 --script res://tests/contact_load_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/track_layout_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd -- --chop
+run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd -- --standing
+run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd -- --standing --chop
 run_check --headless --fixed-fps 240 --script res://tests/handling_tests.gd
 run_check --headless --script res://tests/rider_sensor_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/input_camera_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/automated_feet_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/playability_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/controllability_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/rideability_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/stability_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/recovery_tests.gd

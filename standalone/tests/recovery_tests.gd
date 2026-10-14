@@ -125,14 +125,21 @@ func _assert_reset(label: String, just_integrated: bool = false) -> void:
 	_check(absf(float(game.bike._body_forward)) + absf(float(game.bike._body_side))
 		+ absf(float(game.bike._body_lean)) + absf(float(game.bike._standing))
 		+ absf(float(game.bike._body_twist)) + absf(float(game.bike._rider_yaw_rate))
-		+ absf(float(game.bike._rider_pitch_rate)) + absf(float(game.bike._rider_roll_rate)) < 0.0001,
+		+ absf(float(game.bike._rider_pitch_rate)) + absf(float(game.bike._rider_roll_rate))
+		+ absf(float(game.bike._air_pitch_blend)) + absf(float(game.bike._rider_drive_effort)) < 0.0001
+		and absf(float(game.bike._air_body_reference)) < 0.0001
+		and not game.bike._air_line_changed
+		and (just_integrated or (absf(float(game.bike._rider_weight_support)) < 0.0001
+			and not game.bike._rider_airborne)),
 		label + " removes old posture and articulation momentum")
 	_check(absf(float(game.bike._rider_target_lean)) + absf(float(game.bike._steering_target))
 		+ absf(float(game.bike._heading_correction)) + absf(float(game.bike._steering_integral)) < 0.0001
 		and not game.bike._line_capture_pending and not game.bike._line_from_player_turn
 		and absf(float(game.bike._line_settle_time)) < 0.0001
 		and not game.bike._landing_line_pending and not game.bike._landing_line_active
-		and absf(float(game.bike._landing_line_elapsed)) < 0.0001,
+		and absf(float(game.bike._landing_line_elapsed)) < 0.0001
+		and not game.bike._landing_catch_pending and absf(float(game.bike._landing_catch_remaining)) < 0.0001
+		and absf(float(game.bike._active_torque_limit) - float(game.bike.config.VirtualRider.MaxTorque)) < 0.0001,
 		label + " removes old cornering and steering state")
 	_check(not game.lap_active and game.next_gate == 0,
 		label + " clears the interrupted lap and checkpoint progress")
@@ -202,10 +209,15 @@ func _run() -> void:
 	game.rider_input.controller_bindings.assign("recover", {"kind": "button", "index": JOY_BUTTON_BACK, "direction": 1}, true)
 	var preserved_bindings: Dictionary = game.rider_input.controller_bindings.bindings.duplicate(true)
 	game.rider_input.standing = true
+	# Standing is now a riding preference: a stopped supported rider stays
+	# seated. Use a real gear/clutch launch to establish the standing pose.
+	game.bike.shift_gear(1)
+	Input.action_press("mx_throttle")
+	Input.action_press("mx_clutch_release")
+	await _ticks(480)
 	Input.action_press("mx_body_forward")
 	Input.action_press("mx_body_right")
 	Input.action_press("mx_lean_right")
-	Input.action_press("mx_throttle")
 	await _ticks(90)
 	_check(float(game.bike._standing) > 0.4 and absf(float(game.bike._body_forward)) > 0.4,
 		"Crash fixture starts with a live standing, shifted rider pose")
@@ -250,6 +262,16 @@ func _run() -> void:
 	_check(float(game.rider_input.throttle) == 0.0 and float(game.rider_input.lean) == 0.0
 		and float(game.rider_input.body_forward) == 0.0 and float(game.rider_input.body_side) == 0.0,
 		"Controls held through a crash remain neutral until released")
+	_check(game.rider_input.foot_down and not game.rider_input.standing
+		and bool(game.bike.get_telemetry().footDown),
+		"Held crash inputs cannot lift the automatically planted remount feet",
+		JSON.stringify({"inputFeet": game.rider_input.foot_down,
+			"standing": game.rider_input.standing,
+			"speed": game.bike.get_telemetry().speedMps,
+			"frontContact": game.bike.get_telemetry().frontContact,
+			"rearContact": game.bike.get_telemetry().rearContact,
+			"airTime": game.rider_input._feet_air_elapsed,
+			"stopTime": game.rider_input._feet_stop_elapsed}))
 	_check(not bool(game.bike.get_telemetry().crashed) and int(game.recovery_count) == initial_count + 1,
 		"Held crash inputs do not immediately crash or repeatedly reset the remount")
 	# Release only one held control: new inputs for it should work without

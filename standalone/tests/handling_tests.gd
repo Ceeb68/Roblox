@@ -60,6 +60,9 @@ func run() -> void:
  bike.shift_gear(1)
  var max_torque := 0.0
  var max_intent := 0.0
+ var max_combined_intent := 0.0
+ var grip_envelope := minf(float(bike.config.VirtualRider.MaxComfortLean),
+  atan(float(bike.config.Surfaces.hardpack.Grip) * float(bike.config.VirtualRider.GripMargin)))
  for i in range(1200):
   var t: float = float(i) / 240.0
   bike.set_controls({"throttle": minf(t, 0.8), "clutch": maxf(0.0, 1.0 - t / 1.4),
@@ -68,8 +71,12 @@ func run() -> void:
   var sample: Dictionary = bike.get_telemetry()
   max_torque = maxf(max_torque, absf(sample.riderSteeringTorque))
   max_intent = maxf(max_intent, absf(sample.riderTargetLean))
+  var combined_center: Vector3 = bike.chassis.global_transform * sprung_com_in_frame()
+  var physical_counterbalance := atan2(sprung_com_in_frame().x, maxf(0.4, combined_center.y))
+  max_combined_intent = maxf(max_combined_intent, absf(float(sample.riderTargetLean) + physical_counterbalance))
  check(max_torque <= 45.001, "Virtual rider handlebar actuation remains within 45 Nm human strength")
- check(max_intent <= deg_to_rad(36.001), "Full digital lean intent stays within a conservative surface-aware envelope")
+ check(max_combined_intent <= grip_envelope + deg_to_rad(0.1) and max_intent <= deg_to_rad(49.001),
+  "Full digital combined-CG bank stays within configured hardpack grip margin and finite frame-bank reach")
  # Put an unsupported rider on a genuinely inclined motorcycle at rest.
  # Walking steering has finite torque but cannot pin the body to world-up.
  await make_bike(Vector3(0, 0.88, 0), Basis(Vector3.BACK, deg_to_rad(9.0)))
@@ -88,6 +95,9 @@ func run() -> void:
  check(absf(flight.riderTargetLean) < 0.00001 and absf(flight.headingCorrection) < 0.00001, "Virtual balancing and line intent are inactive airborne")
  check(absf(flight.roll - start_roll) < deg_to_rad(2.0), "No automatic airborne roll/landing correction changes a free attitude")
  check(absf(bike.chassis.linear_velocity.y + 4.905) < 0.35, "Airborne native centre accelerates under gravity")
+ # Direct rider movement has a literal body-position interpretation; virtual
+ # air controls separately request nose-down/up through physical counter-motion.
+ bike.set_riding_mode("direct")
  var old_com: Vector3 = sprung_com_in_frame()
  var old_frame_com: Vector3 = bike.chassis.center_of_mass
  var old_frame_inertia: Vector3 = bike.chassis.inertia

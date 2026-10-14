@@ -164,10 +164,13 @@ func _physics_process(delta: float) -> void:
 	if bike == null:
 		return
 	var enabled: bool = session_started and focused and modal_kind.is_empty() and not get_tree().paused
-	bike.set_controls(rider_input.tick(delta, enabled))
+	var telemetry: Dictionary = bike.get_telemetry()
+	rider_input.tick(delta, enabled)
+	if enabled:
+		rider_input.update_auto_feet(delta, telemetry)
+	bike.set_controls(rider_input.packet())
 	if not enabled:
 		return
-	var telemetry: Dictionary = bike.get_telemetry()
 	var crashed: bool = bool(telemetry.get("crashed", false))
 	if crashed and not was_crashed:
 		_invalidate_lap("Crash — lap invalidated")
@@ -250,7 +253,7 @@ func _input(event: InputEvent) -> void:
 			elif not bike.start_engine():
 				_notice("Engine start: use neutral or pull the clutch, then press T.", 4.0)
 		"recover": _recover()
-	if command in ["upshift", "downshift", "stand", "feet", "recover", "engine"]:
+	if command in ["upshift", "downshift", "stand", "recover", "engine"]:
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton:
@@ -289,7 +292,7 @@ func start_session() -> void:
 	session_started = true
 	focused = true
 	_resume()
-	_notice("E: first gear · W: throttle · hold B: release clutch · F: raise feet", 8.0)
+	_notice("E: first gear · W: throttle · hold B: release clutch · feet lift automatically", 8.0)
 
 func _resume() -> void:
 	if not session_started:
@@ -751,19 +754,20 @@ func _help_content(content: VBoxContainer) -> void:
 	keyboard.add_child(_label("Q / E  Down / upshift     T  Engine start", 15))
 	keyboard.add_child(_label("A / D  Lean command / direct bars     Z / X  Rider lean", 15))
 	keyboard.add_child(_label("I / K  Body forward / back     J / L  Body left / right", 15))
-	keyboard.add_child(_label("C  Seated / standing     F  Feet down / on pegs", 15))
+	keyboard.add_child(_label("C  Seated / standing     Feet lift and plant automatically", 15))
 	keyboard.add_child(_label("R  Recover     M  Camera     H  Help     U  Setup     ESC  Pause", 15))
 	keyboard.add_child(_label("Hold right mouse to orbit · Mouse wheel changes camera distance", 14, MUTED))
-	keyboard.add_child(_label("Starting: E → gentle W → hold B to release the clutch → F to raise feet.\nV/B hold the lever position. Lean-control mode: A/D asks your rider to lean. Z/X moves your upper body.", 14, TEAL))
+	keyboard.add_child(_label("Starting: E → gentle W → hold B to release the clutch. Feet lift as you move.\nV/B hold the lever position. A/D requests bike lean; Z/X moves your upper body.", 14, TEAL))
 	var controller: VBoxContainer = VBoxContainer.new()
 	controller.name = "Controller"
 	controller.add_theme_constant_override("separation", 8)
 	tabs.add_child(controller)
 	controller.add_child(_label("RT  Throttle     LT  Front brake     RB  Rear brake", 15))
 	controller.add_child(_label("LB  Pull clutch; release LB to engage over 0.6 seconds", 15))
-	controller.add_child(_label("Left stick  Lean / airborne bars     Right stick  Rider body position", 15))
+	controller.add_child(_label("Left stick  Bike lean / airborne bars     Right stick  Rider body", 15))
+	controller.add_child(_label("In flight: right stick back pulls nose up; forward pushes nose down", 15))
 	controller.add_child(_label("D-pad ← / →  Rider lean     D-pad ↓ / ↑  Shift down / up", 15))
-	controller.add_child(_label("A  Seated / standing     X  Feet down / on pegs     Y  Recover", 15))
+	controller.add_child(_label("A  Seated / standing     Y  Recover     Feet move automatically", 15))
 	controller.add_child(_label("Left-stick click  Engine start     Right-stick click  Help", 15))
 	controller.add_child(_label("B / Circle  Camera mode     Menu / Start  Pause", 15))
 	controller.add_child(_label("Customize every controller action in Settings → Controller bindings.\nKeyboard controls remain available. Only your selected controller drives.", 14, TEAL))
@@ -783,7 +787,7 @@ func _settings_content(content: VBoxContainer) -> void:
 			bike.set_riding_mode(riding_mode)
 		_save_preferences())
 	content.add_child(mode_select)
-	var mode_info: Label = _label("Lean control: your rider countersteers and braces over bumps.\nManual body positioning takes priority. Direct bars leaves balance to you.\nUse feet at a stop; excessive lean and poor landings can still crash.", 14, MUTED)
+	var mode_info: Label = _label("Lean control: your rider countersteers and braces over bumps.\nMove your body independently to counterbalance the bike.\nFeet lift while riding and plant when you stop.", 14, MUTED)
 	content.add_child(mode_info)
 	content.add_child(_button("Customize controller bindings", func() -> void: _show_modal("bindings")))
 	content.add_child(_label("CAMERA", 16, TEAL))

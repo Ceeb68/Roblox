@@ -11,7 +11,7 @@
   "Drive": {
     "ClutchCapacity": 43,
     "Efficiency": 0.94,
-    "EngineBrakeTorque": 7.5,
+    "EngineBrakeTorque": 3.0,
     "EngineInertia": 0.035,
     "FinalRatio": 3.85,
     "FrictionTorque": 1.3,
@@ -81,6 +81,8 @@
     "RollInertia": 3.2,
     "SideTravel": 0.18,
     "StandingHeight": 0.22,
+    "StandingForeOffset": 0.10,
+    "ForwardCrouch": 0.08,
     "MaxYaw": 0.5235987755982988,
     "YawInertia": 3.2
   },
@@ -91,7 +93,7 @@
     "Inertia": 0.42,
     "InputTorque": 16,
     "MaxAngle": 0.5934119456780721,
-    "Trail": 0.085
+    "Trail": 0.11
   },
   "Surfaces": {
     "concrete": {
@@ -156,7 +158,7 @@
   "VirtualRider": {
     "LowFrequency": 3.0,
     "RollFrequency": 3.4,
-    "RollDamping": 1.2,
+    "RollDamping": 1.8,
     "BarStiffness": 600.0,
     "BarDamping": 25.0,
     "BarIntegral": 300.0,
@@ -174,9 +176,10 @@
     "ContactPerceptionTime": 0.1,
     "SeatedRollFrequency": 6.4,
     "AccelerationBodyBrace": 0.65,
-    "SeatedHeadingFrequency": 3.0,
-    "StandingHeadingFrequency": 3.0,
-    "HeadingDamping": 0.8,
+    "PreparedBodyBrace": 0.95,
+    "SeatedHeadingFrequency": 1.5,
+    "StandingHeadingFrequency": 1.0,
+    "HeadingDamping": 1.2,
     "AirBarTravel": 0.5,
     "TurnExitHeadingFrequency": 1.2,
     "StandingTurnExitHeadingFrequency": 0.65,
@@ -184,7 +187,19 @@
     "AirLinePerceptionTime": 0.2,
     "LandingLineDelay": 0.25,
     "LandingLineResponse": 0.5,
-    "FrontContactConfidenceLoad": 80.0
+    "FrontContactConfidenceLoad": 80.0,
+    "MaxComfortLean": 0.7853981633974483,
+    "GripMargin": 0.92,
+    "IntentExponent": 0.65,
+    "AirPitchTravel": 1.35,
+    "AirBodyPerceptionTime": 0.08,
+    "AirPitchMoveScale": 1.5,
+    "TurnRollFrequency": 5.2,
+    "GroundBodyHandoffTime": 0.35,
+    "MaxLandingCatchTorque": 75.0,
+    "LandingCatchTime": 1.0,
+    "HeadingMinSpeed": 2.0,
+    "HeadingFullSpeed": 6.0
   },
   "Version": 3,
   "Wheelbase": 1.48,
@@ -202,11 +217,14 @@
     "ForeStiffness": 4000,
     "SideDamping": 1300,
     "VerticalDamping": 350,
-    "ForeDamping": 200,
+    "ForeDamping": 400,
     "MaxForce": 3500,
     "PostureStiffness": 180,
-    "PostureDamping": 12,
+    "PostureDamping": 14,
     "YawPostureStiffness": 100.0,
-    "YawPostureDamping": 25.0
+    "YawPostureDamping": 25.0,
+    "WeightSupportResponse": 0.04,
+    "AccelerationSupport": 1.0,
+    "DriveEffortResponse": 0.05
   }
 }

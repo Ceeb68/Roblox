@@ -133,8 +133,8 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 	if not _built:
 		return
 	# Deployed boots are a relaxed seated support stance. A rider cannot stand
-	# on the pegs and place both feet on the ground at the same time. The manual
-	# control remains untouched; this is the presentation of that support state.
+	# on the pegs and place both feet on the ground at the same time. The input
+	# layer raises/lowers the real supporting boots automatically while riding.
 	var stand := 0.0 if feet_down else clampf(standing, 0, 1)
 	var physical_motion = _physical_rider_motion(riding_state)
 	var follows_physical_body := physical_motion is Transform3D
@@ -157,7 +157,7 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 	var flexion := _compression_pose * lerpf(0.25, 1.0, stand)
 	var reaction_shift := -_acceleration_pose * 0.0045
 	var hip_origin := SUPPORT_HIP if feet_down else SEATED_HIP
-	var hip := hip_origin + Vector3(lateral * 0.57, stand * 0.225 - flexion,
+	var hip := hip_origin + Vector3(lateral * 0.57, stand * 0.29 - flexion,
 		-stand * 0.027 + fore_aft * 0.34 + reaction_shift * 0.40)
 	if feet_down:
 		# Both planted boots constrain pelvis height. Let the support stance
@@ -171,7 +171,7 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 			hip.y = minf(hip.y, ankle.y + available_height + 0.005)
 	# A motocross attack stance hinges at the hips instead of raising an erect
 	# torso above the seat. The spine retains its anatomical length in every pose.
-	var hip_hinge := (deg_to_rad(38.0 + stand * 10.0) + body_forward * 0.13
+	var hip_hinge := (deg_to_rad(26.0 + stand * 16.0) + body_forward * 0.13
 		+ flexion * 0.65 + _acceleration_pose * 0.003)
 	var spine := Vector3(lateral * 0.43, cos(hip_hinge), -sin(hip_hinge)).normalized() * TORSO_LENGTH
 	var shoulder_center := hip + spine + Vector3(0, 0, fore_aft * 0.38 + reaction_shift)
@@ -237,10 +237,10 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 		var side := -1.0 if i == 0 else 1.0
 		var shoulder := shoulder_center + _torso.basis.x * side * 0.194
 		var hand: Vector3 = hands[i]
-		# Raised elbows, relaxed forearms and a wide grip produce the recognisable
-		# attack stance. The pole points out/up; it never pulls an elbow behind the rider.
+		# Elbows stay out with a relaxed bend, rather than a shoulder-height
+		# exaggerated squat. Standing opens the legs and hinges at the hips.
 		var elbow := _two_bone(shoulder, hand, 0.303, 0.289,
-			anatomy_frame * Vector3(side * 0.95, 0.70 + stand * 0.15, -0.06))
+			anatomy_frame * Vector3(side * 0.95, -0.48 + stand * 0.88, -0.18))
 		_shoulders[i].position = shoulder
 		_set_link(_upper_arms[i], shoulder, elbow)
 		_set_link(_forearms[i], elbow, hand)

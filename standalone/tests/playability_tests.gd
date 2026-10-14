@@ -30,6 +30,11 @@ func _release_actions() -> void:
 		if String(action).begins_with("mx_"):
 			Input.action_release(action)
 
+func _update_riding_controls() -> void:
+	rider.tick(1.0 / HZ, true)
+	rider.update_auto_feet(1.0 / HZ, bike.get_telemetry())
+	bike.set_controls(rider.packet())
+
 func _new_bike() -> void:
 	_release_actions()
 	if is_instance_valid(bike):
@@ -41,11 +46,12 @@ func _new_bike() -> void:
 	world.add_child(bike)
 	bike.reset_bike(Transform3D(Basis.IDENTITY, Vector3(0.0, 0.82, 0.0)))
 	for _i: int in range(240):
-		bike.set_controls(rider.tick(1.0 / HZ, true))
+		_update_riding_controls()
 		await _tick()
 
 func _keyboard_run() -> Dictionary:
 	await _new_bike()
+	_check(bool(bike.get_telemetry().footDown), "Stationary native startup automatically settles with feet planted")
 	_check(bike.shift_gear(1), "Actual launch can select first with the clutch pulled")
 	var origin: Vector3 = bike.chassis.global_position
 	Input.action_press("mx_throttle")
@@ -56,11 +62,10 @@ func _keyboard_run() -> Dictionary:
 	var first_100_reached := false
 	var first_100_max_lateral := 0.0
 	var first_100_heading := 0.0
+	var auto_feet_lifted := false
 	var origin_heading := atan2(-bike.chassis.global_basis.z.x, -bike.chassis.global_basis.z.z)
 	var snapshots: Array[Dictionary] = []
 	for i: int in range(3360):
-		if i == 240:
-			rider.foot_down = false
 		# A human can short-shift after setting the lever; use a pulled clutch
 		# during each deliberate shift rather than replacing drive state.
 		if i in [600, 1000, 1400, 1900]:
@@ -68,9 +73,11 @@ func _keyboard_run() -> Dictionary:
 		if i in [620, 1020, 1420, 1920]:
 			bike.shift_gear(1)
 			Input.action_release("mx_clutch_quick")
-		bike.set_controls(rider.tick(1.0 / HZ, true))
+		_update_riding_controls()
 		await _tick()
 		var t: Dictionary = bike.get_telemetry()
+		if not bool(t.footDown):
+			auto_feet_lifted = true
 		max_roll = maxf(max_roll, absf(float(t.roll)))
 		max_speed = maxf(max_speed, float(t.speedMps))
 		grounded_ticks += int(bool(t.frontContact) or bool(t.rearContact))
@@ -90,13 +97,17 @@ func _keyboard_run() -> Dictionary:
 	_check(float(result.forward) > 120.0 and max_speed > 15.0, "Keyboard rider makes substantial native forward progress", "%.1f m / %.1f m/s" % [result.forward, max_speed])
 	_check(max_roll < 0.4, "Default virtual rider keeps an uncommanded long acceleration within a reasonable bank angle", "%.1f degrees" % rad_to_deg(max_roll))
 	_check(grounded_ticks > 2400, "Playable launch is supported by real tire contacts rather than hovering", "%s frames" % grounded_ticks)
-	_check(not bool(bike.get_telemetry().footDown), "Long keyboard launch continues with the physical feet raised")
+	_check(auto_feet_lifted and not bool(bike.get_telemetry().footDown), "Keyboard launch automatically raises and retains the physical feet while riding")
+	var feet_disabled := true
+	for foot: CollisionShape3D in bike._feet:
+		feet_disabled = feet_disabled and foot.disabled
+	_check(feet_disabled, "Automatic lift removes both physical ground-supporting boot collisions during the ride")
 	_check(first_100_reached and first_100_max_lateral < 3.0, "Neutral steering stays within a rideable lane over the first 100 meters", "maximum lateral drift %.2f m" % first_100_max_lateral)
 	_check(first_100_reached and first_100_heading < deg_to_rad(12.0), "Neutral steering avoids a large uncommanded heading change over the first 100 meters", "heading change %.1f degrees" % rad_to_deg(first_100_heading))
 	_release_actions()
 	return result
 
-func _rider_corner_run(direction: float, command_kind: String = "lean", amount: float = 0.4, hold_seconds: float = 5.0, verify: bool = true) -> Dictionary:
+func _rider_corner_run(direction: float, command_kind: String = "steer", amount: float = 0.4, hold_seconds: float = 5.0, verify: bool = true) -> Dictionary:
 	await _new_bike()
 	bike.shift_gear(1)
 	var origin: Vector3 = bike.chassis.global_position
@@ -113,15 +124,12 @@ func _rider_corner_run(direction: float, command_kind: String = "lean", amount: 
 	var previous_heading := 0.0
 	var accumulated_heading := 0.0
 	var max_speed := 0.0
-	var feet_raised := false
 	var snapshots: Array[Dictionary] = []
 	var target_corner_ticks := roundi(hold_seconds * HZ)
 	for i: int in range(roundi((12.0 + hold_seconds) * HZ)):
 		var t: Dictionary = bike.get_telemetry()
 		var speed: float = float(t.speedMps)
 		var time: float = float(i) / HZ
-		if speed > 1.6:
-			feet_raised = true
 		if not corner_started and speed > 5.0 and time > 3.0:
 			corner_started = true
 			corner_start_heading = atan2(-bike.chassis.global_basis.z.x, -bike.chassis.global_basis.z.z)
@@ -133,10 +141,13 @@ func _rider_corner_run(direction: float, command_kind: String = "lean", amount: 
 		# entry pace, using only a genuine drivetrain input. No balance targets
 		# or velocity changes are made by the fixture.
 		var throttle_value: float = clampf(0.66 + (8.0 - speed) * 0.15, 0.2, 0.85) if corner_started else 0.8
-		bike.set_controls({"throttle": throttle_value,
-			"clutch": clampf(1.0 - time / 1.2, 0.0, 1.0), "footDown": not feet_raised,
-			"steer": request if command_kind == "steer" else 0.0,
-			"lean": request if command_kind == "lean" else 0.0, "bodySide": 0.0})
+		rider.throttle = throttle_value
+		rider.clutch = clampf(1.0 - time / 1.2, 0.0, 1.0)
+		rider.steer = request if command_kind == "steer" else 0.0
+		rider.lean = request if command_kind == "lean" else 0.0
+		rider.body_side = 0.0
+		rider.update_auto_feet(1.0 / HZ, t)
+		bike.set_controls(rider.packet())
 		await _tick()
 		t = bike.get_telemetry()
 		max_speed = maxf(max_speed, float(t.speedMps))
@@ -216,14 +227,13 @@ func _test_main_scene_ui() -> void:
 	for _i: int in range(240):
 		await _tick()
 	_check(bool(game.session_started) and not paused and game.modal_kind.is_empty(), "Ride button opens the real playable session")
+	_check(bool(game.bike.get_telemetry().footDown), "Main session automatically plants feet while the motorcycle is stopped")
 	await _press_key(KEY_E)
 	_check(int(game.bike.get_telemetry().gear) == 1, "Actual E key reaches the main game's manual gearbox")
 	_key_event(KEY_W, true)
 	_key_event(KEY_B, true)
 	var origin: Vector3 = game.bike.chassis.global_position
 	for i: int in range(1200):
-		if i == 240:
-			await _press_key(KEY_F)
 		if i == 600:
 			_key_event(KEY_SHIFT, true)
 		if i == 620:
@@ -234,14 +244,14 @@ func _test_main_scene_ui() -> void:
 	var distance: float = origin.distance_to(game.bike.chassis.global_position)
 	print("PLAYABILITY main UI: distance=%.2f m, speed=%.2f m/s, gear=%d, feet=%s, crashed=%s" % [distance, state.speedMps, state.gear, state.footDown, state.crashed])
 	_check(not bool(state.crashed) and distance > 15.0 and float(state.speedMps) > 5.0, "Shipped track and actual keyboard event flow support a five-second ride", "%.1f m / %.1f m/s / crash=%s" % [distance, state.speedMps, state.crashed])
-	_check(not bool(state.footDown), "Main F key actually raises the rider's physical feet")
+	_check(not bool(state.footDown), "Main keyboard launch automatically raises the physical feet without a feet button")
 	_key_event(KEY_W, false)
 	_key_event(KEY_B, false)
 	await _press_key(KEY_H)
 	_check(game.modal_kind == "help" and paused, "Actual help key opens the main controls screen")
-	var feet_before: bool = game.rider_input.foot_down
-	await _press_key(KEY_F)
-	_check(game.rider_input.foot_down == feet_before, "A ride command while reading help does not change the rider's physical posture")
+	var standing_before: bool = game.rider_input.standing
+	await _press_key(KEY_C)
+	_check(game.rider_input.standing == standing_before, "A ride command while reading help does not change the rider's physical posture")
 	await _press_key(KEY_H)
 	_check(game.modal_kind.is_empty() and not paused, "Help key resumes the playable session")
 	game.queue_free()

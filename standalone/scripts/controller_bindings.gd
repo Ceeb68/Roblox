@@ -3,13 +3,13 @@ extends RefCounted
 const FILE_PATH: String = "user://controller_bindings.cfg"
 const ACTIONS: Array[String] = ["throttle", "front_brake", "rear_brake", "clutch",
 	"steer_left", "steer_right", "lean_left", "lean_right", "body_forward", "body_back",
-	"body_left", "body_right", "upshift", "downshift", "stand", "feet", "recover",
+	"body_left", "body_right", "upshift", "downshift", "stand", "recover",
 	"engine", "camera", "help", "setup", "pause"]
 const LABELS: Dictionary = {"throttle": "Throttle", "front_brake": "Front brake", "rear_brake": "Rear brake",
 	"clutch": "Clutch lever", "steer_left": "Bike lean / bars left", "steer_right": "Bike lean / bars right",
 	"lean_left": "Rider lean left", "lean_right": "Rider lean right", "body_forward": "Rider forward",
 	"body_back": "Rider backward", "body_left": "Rider left", "body_right": "Rider right",
-	"upshift": "Shift up", "downshift": "Shift down", "stand": "Stand / sit", "feet": "Feet / pegs",
+	"upshift": "Shift up", "downshift": "Shift down", "stand": "Stand / sit",
 	"recover": "Recover", "engine": "Engine start", "camera": "Camera mode", "help": "Controls",
 	"setup": "Suspension setup", "pause": "Pause"}
 var bindings: Dictionary = {}
@@ -36,7 +36,7 @@ func reset_defaults() -> void:
 		"body_forward": _axis(JOY_AXIS_RIGHT_Y, -1), "body_back": _axis(JOY_AXIS_RIGHT_Y, 1),
 		"body_left": _axis(JOY_AXIS_RIGHT_X, -1), "body_right": _axis(JOY_AXIS_RIGHT_X, 1),
 		"upshift": _button(JOY_BUTTON_DPAD_UP), "downshift": _button(JOY_BUTTON_DPAD_DOWN),
-		"stand": _button(JOY_BUTTON_A), "feet": _button(JOY_BUTTON_X), "recover": _button(JOY_BUTTON_Y),
+		"stand": _button(JOY_BUTTON_A), "recover": _button(JOY_BUTTON_Y),
 		"engine": _button(JOY_BUTTON_LEFT_STICK), "camera": _button(JOY_BUTTON_B),
 		"help": _button(JOY_BUTTON_RIGHT_STICK), "setup": {}, "pause": _button(JOY_BUTTON_START)}
 	deadzone = 0.14

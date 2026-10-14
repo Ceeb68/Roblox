@@ -61,6 +61,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 	bindings.reset_defaults()
 	check(bindings.describe("throttle") == "RT / R2 +" and is_equal_approx(float(bindings.deadzone), 0.14), "reset restores controller layout and deadzone")
+	check(not "feet" in bindings.ACTIONS and not bindings.bindings.has("feet"), "automatic feet removes the manual feet action from controller bindings")
 	bindings.assign("upshift", {"kind": "axis", "index": JOY_AXIS_LEFT_Y, "direction": -1}, true)
 	bindings.assign("downshift", {"kind": "axis", "index": JOY_AXIS_LEFT_Y, "direction": 1}, true)
 	check(bindings.action_for_event(joy_axis(7, JOY_AXIS_LEFT_Y, -1.0), 4).is_empty(), "unselected device cannot shift")
@@ -69,6 +70,7 @@ func _run() -> void:
 	check(bindings.action_for_event(joy_axis(4, JOY_AXIS_LEFT_Y, 1.0), 4) == "downshift", "opposite axis command fires after crossing")
 	check(bindings.action_for_event(joy_axis(4, JOY_AXIS_LEFT_Y, -1.0), 4) == "upshift", "return crossing re-arms command without resting frame")
 	var rider: RefCounted = RiderInput.new()
+	check(not InputMap.has_action("mx_feet"), "automatic feet removes the legacy keyboard feet action")
 	rider.controller_bindings = bindings
 	rider.select_controller(4)
 	rider.note_event(joy_button(7, JOY_BUTTON_A))
@@ -130,9 +132,15 @@ func _run() -> void:
 	camera_key.pressed = true
 	game._input(camera_key)
 	check(game.camera_mode == "first_person", "keyboard M toggles actual game camera")
-	game.rider_input.foot_down = false
+	# Camera probes intentionally displaced one body while paused. Restore
+	# a complete stationary mount before checking support/recovery semantics.
+	game.bike.reset_bike(game.track.spawn, true)
+	game.rider_input.reset_for_recovery()
 	game.rider_input.standing = true
 	game.rider_input.clutch = 0.0
+	game.rider_input.update_auto_feet(1.0 / 240.0, game.bike.get_telemetry())
+	check(game.rider_input.standing and game.rider_input.foot_down and not bool(game.rider_input.packet().standing),
+		"standing preference retains automatic seated ground support before a stationary recovery")
 	game.bike.set_controls(game.rider_input.packet())
 	var recover_key: InputEventKey = InputEventKey.new()
 	recover_key.physical_keycode = KEY_R
@@ -208,6 +216,11 @@ func _chase_input_regressions(game: Node3D) -> void:
 	var original_distance: float = game.orbit_distance
 	game.rider_input.select_controller(4)
 	game.rider_input.controller_bindings.reset_defaults()
+	check(game.rider_input.command(joy_button(4, JOY_BUTTON_X)).is_empty(), "legacy Xbox X button no longer toggles feet")
+	var legacy_feet_key := InputEventKey.new()
+	legacy_feet_key.physical_keycode = KEY_F
+	legacy_feet_key.pressed = true
+	check(game.rider_input.command(legacy_feet_key).is_empty(), "legacy F key no longer toggles feet")
 	var target: Vector3 = body.global_position + Vector3.UP * 0.65
 	var unobstructed: Transform3D = game.camera_target_transform()
 	check(unobstructed.origin.distance_to(target) > 4.0, "chase ray fixture begins clear of terrain")

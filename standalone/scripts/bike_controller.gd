@@ -34,7 +34,7 @@ class NativeBody:
 		Gyro.integrate(state)
 const FRONT_AXLE := Vector3(0.0, -0.44, -0.74)
 const REAR_AXLE := Vector3(0.0, -0.44, 0.74)
-const HEAD := Vector3(0.0, 0.36, -0.265)
+const HEAD := Vector3(0.0, 0.36, -0.290)
 const RIDER_ORIGIN := Vector3(0.0, 0.54, 0.09)
 const CONTROL_RANGES := {
 	"throttle": Vector2(0, 1), "frontBrake": Vector2(0, 1),
@@ -116,6 +116,15 @@ var _forward_acceleration: float = 0.0
 var _last_velocity_sample := Vector3.ZERO
 var _velocity_sample_valid: bool = false
 var _automatic_body_forward: float = 0.0
+var _rider_weight_support: float = 0.0
+var _air_body_reference: float = 0.0
+var _rider_airborne: bool = false
+var _air_pitch_blend: float = 0.0
+var _air_line_changed: bool = false
+var _rider_drive_effort: float = 0.0
+var _landing_catch_pending: bool = false
+var _landing_catch_remaining: float = 0.0
+var _active_torque_limit: float = 45.0
 var _mechanical_trail: float = 0.0
 
 static func _neutral_controls() -> Dictionary:
@@ -331,6 +340,15 @@ func _reset_models() -> void:
 	_last_velocity_sample = Vector3.ZERO
 	_velocity_sample_valid = false
 	_automatic_body_forward = 0.0
+	_rider_weight_support = 0.0
+	_air_body_reference = 0.0
+	_rider_airborne = false
+	_air_pitch_blend = 0.0
+	_air_line_changed = false
+	_rider_drive_effort = 0.0
+	_landing_catch_pending = false
+	_landing_catch_remaining = 0.0
+	_active_torque_limit = float(config.get("VirtualRider", {}).get("MaxTorque", 45.0))
 	_mechanical_trail = 0.0
 	_rider_steering_torque = 0.0
 	_rider_target_lean = 0.0
@@ -389,6 +407,14 @@ func set_riding_mode(mode: String) -> bool:
 	_landing_line_pending = false
 	_landing_line_active = false
 	_landing_line_elapsed = 0.0
+	_landing_catch_pending = false
+	_landing_catch_remaining = 0.0
+	_active_torque_limit = float(config.get("VirtualRider", {}).get("MaxTorque", 45.0))
+	_air_pitch_blend = 0.0
+	_air_body_reference = _body_forward
+	_rider_airborne = false
+	_air_line_changed = false
+	_rider_drive_effort = 0.0
 	if _built:
 		_rider_heading = -chassis.global_basis.z
 		_rider_line_origin = chassis.global_position
@@ -443,11 +469,20 @@ func _physics_process(dt: float) -> void:
 	_apply_drivetrain(active, dt)
 	_front_result = _apply_tire(front_wheel, front_tire_state, float(config.FrontRadius), dt)
 	_rear_result = _apply_tire(rear_wheel, rear_tire_state, float(config.RearRadius), dt)
-	# Physical quadratic drag; no artificial lateral/angular damping on bike.
-	var velocity := chassis.linear_velocity
-	chassis.apply_central_force(-velocity * velocity.length() * 0.31)
+	_apply_aerodynamic_drag()
 	_detect_crash(dt)
 	_update_visuals()
+
+func _apply_aerodynamic_drag() -> void:
+	# A neutral pressure distribution belongs to both the machine and rider.
+	# Putting their entire drag on the low frame COM creates an uncommanded
+	# nose-down couple in flight. Each real body instead receives its share
+	# at its own COM, using its own velocity, so drag still dissipates energy.
+	# The aggregate quadratic coefficient remains 0.31; no attitude is sensed.
+	var mass_sum := chassis.mass + rider_body.mass
+	for body: RigidBody3D in [chassis, rider_body]:
+		var velocity := body.linear_velocity
+		body.apply_central_force(-velocity * velocity.length() * 0.31 * body.mass / mass_sum)
 
 func _apply_suspension(wheel: Wheel, parent_body: RigidBody3D,
 		full_droop: Vector3, is_front: bool, dt: float) -> void:
@@ -476,6 +511,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 	var damping := float(config.Steering.Damping)
 	var riding: Dictionary = config.get("VirtualRider", {})
 	var scalar := -float(input.steer) * float(config.Steering.InputTorque) - rate * damping
+	_active_torque_limit = float(riding.get("MaxTorque", 45.0))
 	_rider_target_lean = 0.0
 	_heading_correction = 0.0
 	_steering_target = 0.0
@@ -488,17 +524,28 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		# Bars remain a real bearing with equal/opposite torques. With neither
 		# tire supported, the roll feedback is completely inactive.
 		var grounded := front_wheel.contact or rear_wheel.contact
+		# Catch effort is a separate muscle task, not a heading-reference flag.
+		# It begins only after a sustained flight and actual loaded front return,
+		# and cannot be prolonged by steering commands or microscopic wheel gaps.
+		if not grounded and _air_time >= float(riding.get("AirLinePerceptionTime", 0.2)):
+			_landing_catch_pending = true
+			_landing_catch_remaining = 0.0
+		if _landing_catch_pending and front_wheel.contact and front_wheel.normal_load > 0.0:
+			_landing_catch_pending = false
+			_landing_catch_remaining = float(riding.get("LandingCatchTime", 0.6))
+		else:
+			_landing_catch_remaining = maxf(0.0, _landing_catch_remaining - dt)
 		if grounded and front_wheel.normal_load + rear_wheel.normal_load > 100.0:
 			_line_ground_seen = true
 		if not grounded and _line_ground_seen and _air_time >= float(riding.get("AirLinePerceptionTime", 0.2)):
-			# A sustained jump ends the old ground line reference. A brief bump
+			# A sustained jump clears old ground-feedback history. A brief bump
 			# does not erase the human's chosen line each time a patch unloads.
-			# In flight the rider has no balance/heading actuator. Capture a
-			# fresh actual travel line once loaded contact returns, then acquire
-			# it gradually through finite handlebars as the landing settles.
+			# Neutral flight preserves that line; a deliberate whip chooses an
+			# actual travel line on return. Flight has no balance/heading actuator.
 			_line_capture_pending = true
 			_line_settle_time = 0.0
-			_line_from_player_turn = true
+			if _air_line_changed:
+				_line_from_player_turn = true
 			_landing_line_pending = true
 			_landing_line_active = false
 			_landing_line_elapsed = 0.0
@@ -508,7 +555,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			_bank_intent = 0.0
 			_steering_integral = 0.0
 		var forward_speed := maxf(0.0, chassis.linear_velocity.dot(-chassis.global_basis.z))
-		var blend := smoothstep(0.6, 2.2, forward_speed) if grounded else 0.0
+		var blend := (smoothstep(0.6, 2.2, forward_speed) if bool(input.footDown) else smoothstep(0.25, 1.0, forward_speed)) if grounded else 0.0
 		var contact_rate := 1.0 / maxf(float(riding.get("ContactPerceptionTime", 1.0 / 12.0)), 0.01)
 		# Tire grip already falls with the actual normal load. A lightly loaded
 		# but supported front patch still needs the rider's finite bar strength
@@ -536,18 +583,32 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		var low_speed_lean := atan(speed_squared * tan(max_angle * 0.85) / (9.81 * wheelbase))
 		var front_surface: Dictionary = config.Surfaces.get(front_wheel.surface, config.Surfaces.dirt)
 		var rear_surface: Dictionary = config.Surfaces.get(rear_wheel.surface, config.Surfaces.dirt)
-		var grip_lean := minf(deg_to_rad(36.0), atan(minf(float(front_surface.Grip), float(rear_surface.Grip)) * 0.85))
+		var grip_lean := minf(float(riding.get("MaxComfortLean", deg_to_rad(45.0))), atan(minf(float(front_surface.Grip), float(rear_surface.Grip)) * float(riding.get("GripMargin", 0.92))))
 		var available_lean := minf(minf(deg_to_rad(49.0), grip_lean), low_speed_lean)
-		var requested_bank := clampf(float(input.steer) + float(input.lean) * 0.9, -1.0, 1.0) * available_lean
+		# The left stick requests the bank of the combined bike/rider mass.
+		# Rider roll and side movement are independent physical counterbalance,
+		# not a second bike-bank command that cancels the left-stick request.
+		var steer_request := clampf(float(input.steer), -1.0, 1.0)
+		var requested_bank := signf(steer_request) * pow(absf(steer_request), float(riding.get("IntentExponent", 0.65))) * available_lean
 		_heading_correction = 0.0
 		var forward := -chassis.global_basis.z
 		forward.y = 0.0
 		forward = forward.normalized()
 		if _landing_line_pending and grounded and front_wheel.normal_load + rear_wheel.normal_load > 100.0:
-			var landing_direction := chassis.linear_velocity
-			landing_direction.y = 0.0
-			_rider_heading = landing_direction.normalized() if landing_direction.length_squared() > 2.25 else forward
-			_rider_line_origin = chassis.global_position
+			# Neutral jumping preserves the direction the human chose before
+			# takeoff. Adopting every sideways touchdown velocity as a new desired
+			# heading lets small drifts compound across successive tabletops.
+			# Reacquire that line gradually through the same finite ground
+			# handlebars; flight has no correction.
+			if _air_line_changed:
+				# A deliberate whip chooses a different actual exit direction. Do
+				# not ask ground bars to return to the line before that maneuver.
+				var landing_direction := chassis.linear_velocity
+				landing_direction.y = 0.0
+				_rider_heading = landing_direction.normalized() if landing_direction.length_squared() > 2.25 else forward
+				_rider_line_origin = chassis.global_position
+			elif _rider_heading.length_squared() < 0.5:
+				_rider_heading = forward
 			_landing_line_pending = false
 			_landing_line_active = true
 			_landing_line_elapsed = 0.0
@@ -555,7 +616,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			_line_settle_time = 0.0
 		if _landing_line_active and grounded:
 			_landing_line_elapsed = minf(_landing_line_elapsed + dt, 2.0)
-		if absf(float(input.steer)) + absf(float(input.lean)) > 0.025:
+		if absf(float(input.steer)) > 0.025:
 			_landing_line_pending = false
 			_landing_line_active = false
 			_landing_line_elapsed = 0.0
@@ -564,7 +625,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			_line_capture_pending = true
 			_line_settle_time = 0.0
 			_line_from_player_turn = true
-		elif _line_capture_pending:
+		elif _line_capture_pending and grounded and not _landing_line_pending:
 			# Let a released stick return the bike upright before capturing its
 			# next line. Capturing the still-turning tangent immediately asks the
 			# rider to undo the natural finishing arc with an opposite bank.
@@ -598,6 +659,10 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 				heading_frequency = lerpf(float(riding.get("TurnExitHeadingFrequency", 1.2)), float(riding.get("StandingTurnExitHeadingFrequency", 0.65)), _standing)
 			_heading_correction = clampf(atan(forward_speed * (heading_error * heading_frequency - yaw_rate * float(riding.get("HeadingDamping", 0.8))) / 9.81),
 				-deg_to_rad(12.0), deg_to_rad(12.0))
+			# At walking pace prioritize balance over recovering an old lane.
+			# A full heading request while slowing through a whoop otherwise
+			# demands a deep bank that the remaining forward speed cannot support.
+			_heading_correction *= smoothstep(float(riding.get("HeadingMinSpeed", 2.0)), float(riding.get("HeadingFullSpeed", 6.0)), forward_speed)
 			if _landing_line_active:
 				# Hold the touchdown reference fixed. Waiting indefinitely for a
 				# perfectly quiet bank while moving the reference each tick lets a
@@ -611,15 +676,24 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		if grounded:
 			var intent_change := (requested_bank - _bank_intent) * (1.0 - exp(-dt / float(riding.get("IntentResponse", 0.16))))
 			_bank_intent += clampf(intent_change, -float(riding.get("MaxLeanRate", 1.4)) * dt, float(riding.get("MaxLeanRate", 1.4)) * dt)
-			_rider_target_lean = clampf(_bank_intent, -deg_to_rad(36.0), deg_to_rad(36.0))
 		# Seated and standing compliance have different roll modes. Schedule
 		# the virtual human's feedback with the actual posture, without changing
 		# available grip, bearing strength or the bike's physical attitude.
 		var frequency := lerpf(float(riding.get("LowFrequency", 3.0)), lerpf(float(riding.get("SeatedRollFrequency", 6.4)), float(riding.get("RollFrequency", 3.4)), _standing), smoothstep(2.0, 7.0, forward_speed))
 		frequency = lerpf(frequency, float(riding.get("HighSpeedFrequency", 3.4)), smoothstep(15.0, 28.0, forward_speed))
+		# Deliberate turns need quicker human bar response than a neutral rider
+		# traversing whoops. Schedule muscle feedback from the requested task,
+		# never by adding an independent frame stabilization force.
+		var turn_task := smoothstep(deg_to_rad(1.0), deg_to_rad(5.0), absf(_bank_intent))
+		frequency = lerpf(frequency, maxf(frequency, float(riding.get("TurnRollFrequency", 5.2))), turn_task)
 		var factor := height * wheelbase / speed_squared
 		# Roll equilibrium includes rider COM displaced from the frame centre.
 		var com_camber := atan2(chassis.to_local(_sprung_com()).x, height)
+		# Holding frame bank would steer away every real rider weight shift.
+		# Counterbalancing outside a corner permits more frame bank for the same
+		# combined-CG turn request, with all motion supplied by finite bars.
+		if grounded:
+			_rider_target_lean = clampf(_bank_intent - com_camber, -deg_to_rad(49.0), deg_to_rad(49.0))
 		var equilibrium := 9.81 * wheelbase * tan(clampf(lean + com_camber, -1.1, 1.1)) / speed_squared
 		_steering_target = clampf(equilibrium + factor * (frequency * frequency *
 			(lean - _rider_target_lean) + 2.0 * float(riding.get("RollDamping", 1.2)) * frequency * lean_rate), -max_angle, max_angle)
@@ -660,9 +734,19 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		var bar_speed := maxf(1.0, float(riding.get("BarSpeedReference", 12.0)))
 		var bandwidth := clampf(speed_squared / (bar_speed * bar_speed), 1.0, float(riding.get("MaxBarBandwidth", 6.0)))
 		var bar_damping := lerpf(float(riding.get("BarDamping", 18.0)), float(riding.get("HighSpeedBarDamping", 18.0)), smoothstep(10.0, 17.0, forward_speed))
+		var bar_limit := float(riding.get("MaxTorque", 45.0))
+		if front_wheel.contact and front_wheel.normal_load > 0.0 and _landing_catch_remaining > 0.0:
+			# A brief two-handed catch can use more muscle effort than steady
+			# steering. It still acts only across the actual bearing, and expires
+			# after ground contact instead of becoming a chassis balancing torque.
+			var catch_time := float(riding.get("LandingCatchTime", 0.6))
+			var catch_effort := smoothstep(0.0, catch_time * 0.40, _landing_catch_remaining)
+			bar_limit = lerpf(bar_limit, float(riding.get("MaxLandingCatchTorque", 75.0)), catch_effort)
+		_active_torque_limit = bar_limit
 		var handlebar_torque := clampf(-(_steering_target - angle) * float(riding.get("BarStiffness", 600.0)) * bandwidth * lerpf(1.0, float(riding.get("ImpactGripScale", 1.5)), brace) - rate * bar_damping * sqrt(bandwidth) - _steering_integral * float(riding.get("BarIntegral", 300.0)) * bandwidth,
-			-float(riding.get("MaxTorque", 45.0)), float(riding.get("MaxTorque", 45.0)))
-		# At walking pace use deliberate steering while feet carry balance.
+			-bar_limit, bar_limit)
+		# Feet-down walking uses deliberate steering; an unplanted rider retains
+		# physical bar balance at a crawl rather than being forced to centre.
 		var walking_angle := float(input.steer) * max_angle * 0.65
 		var walking_torque := clampf(-(walking_angle - angle) * 36.0 - rate * 5.0,
 			-float(config.Steering.InputTorque), float(config.Steering.InputTorque))
@@ -671,7 +755,11 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		# Balance authority must match the same CURRENT load the tire uses;
 		# perceived contact history cannot drive bicycle curvature through an
 		# unloaded wheel. Hand grip itself is retained at full finite strength.
-		var loaded_balance := front_authority * _front_support
+		# Actual positive front load admits ground balance feedback immediately.
+		# A100ms perceived-support ramp lets a good landing roll away before the
+		# finite hands can catch it. Slip feed-forward still uses filtered contact
+		# perception above; zero-load contact supplies no balance authority.
+		var loaded_balance := front_authority * (1.0 if _landing_catch_remaining > 0.0 else _front_support)
 		# In flight the player exchanges the spinning front wheel's angular
 		# momentum through actual bar travel, alongside independent torso twist.
 		# Partial bar travel keeps the coupled whip/reversal controllable; this
@@ -704,6 +792,9 @@ func _apply_drivetrain(input: Dictionary, dt: float) -> void:
 	var drive_config: Dictionary = config.Drive.duplicate()
 	drive_config.RearInertia = rear_effective_inertia
 	_drive_result = Drive.step(drive_state, input, 0.0, dt, drive_config)
+	# The rider can feel actual drive through an engaged clutch, including
+	# useful moderate-throttle torque below the full-throttle preparation band.
+	_drive_result.transmittedTorque = rear_effective_inertia * (float(_drive_result.rearOmega) - measured) / maxf(dt, 0.000001)
 	var wheel_impulse := -rear_axis * rear_effective_inertia * (float(_drive_result.rearOmega) - measured)
 	rear_wheel.apply_torque_impulse(wheel_impulse)
 	chassis.apply_torque_impulse(-wheel_impulse)
@@ -780,6 +871,15 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 	var rider: Dictionary = config.Rider
 	var step_size := float(rider.MoveRate) * dt
 	var body_request := float(input.bodyForward)
+	var requested_drive_effort := smoothstep(0.55, 0.80, float(input.throttle)) * (1.0 - maxf(float(input.frontBrake), float(input.rearBrake)))
+	_rider_drive_effort += (requested_drive_effort - _rider_drive_effort) * (1.0 - exp(-dt / float(config.RiderSupport.get("DriveEffortResponse", 0.05))))
+	var unsupported := not front_wheel.contact and not rear_wheel.contact
+	if unsupported and not _rider_airborne and _air_pitch_blend < 0.001:
+		_air_body_reference = _body_forward
+		_air_line_changed = false
+	if unsupported and absf(float(input.steer)) + absf(float(input.lean)) + absf(float(input.bodySide)) > 0.05:
+		_air_line_changed = true
+	_rider_airborne = unsupported
 	if riding_mode == "virtual_rider" and not crashed:
 		if absf(body_request) >= 0.98:
 			# Full deliberate posture has complete manual authority.
@@ -805,21 +905,50 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 				var unloading := 1.0 - smoothstep(0.08, 0.40, front_share)
 				var lifting := smoothstep(deg_to_rad(2.0), deg_to_rad(10.0), nose_up + pitch_rate * 0.10)
 				var forward_brace := accelerating * maxf(unloading, lifting) * float(config.VirtualRider.get("AccelerationBodyBrace", 0.65))
+				# A human prepares for a clutch/throttle-driven acceleration before
+				# the front is already unloaded. This moves actual rider mass through
+				# the same finite legs; drive/brake commands are never overridden.
+				# Keep preparing while an open clutch briefly interrupts a shift;
+				# returning the body rearward while the engine is revving would undo
+				# the rider's preparation exactly before the next clutch engagement.
+				# Prepare the torso before moderate drive unloads the front, too.
+				# Shaft torque estimates propulsion without treating a whoop's
+				# vertical impact or a frame-pitch acceleration as extra engine drive.
+				var shaft_acceleration := maxf(0.0, float(_drive_result.get("transmittedTorque", 0.0))) / (float(config.RearRadius) * (float(config.BikeMass) + float(config.RiderMass)))
+				var prepared_drive := maxf(smoothstep(0.55, 0.95, float(input.throttle)), smoothstep(1.5, 4.5, shaft_acceleration) * (1.0 - float(input.clutch)))
+				prepared_drive *= 1.0 - maxf(float(input.frontBrake), float(input.rearBrake))
+				forward_brace = maxf(forward_brace, prepared_drive * float(config.VirtualRider.get("PreparedBodyBrace", 0.95)))
 				reflex_target = maxf(reflex_target, forward_brace) if forward_brace > 0.0 else reflex_target
 			_automatic_body_forward = move_toward(_automatic_body_forward, reflex_target, dt * 2.0)
 		# Choosing a modest body position does not make the rider rigid to
 		# every impact. A small terrain-bracing offset uses the remaining pose
-		# travel; authority fades quadratically toward fully manual endpoints.
+		# travel; a monotonic mix preserves fully manual endpoints.
 		# Keep the last ground-informed reflex in unsupported flight. Only a
 		# deliberate player input can request a new body position in the air.
-		var reflex_authority := (1.0 - absf(body_request)) ** 2
+		var reflex_authority := 1.0 - absf(body_request)
 		body_request = clampf(body_request + _automatic_body_forward * reflex_authority, -1.0, 1.0)
 	else:
 		_automatic_body_forward = 0.0
+	if riding_mode == "virtual_rider" and not crashed:
+		# Air controls express a rider's push/pull effort through the bars and
+		# hips: pulling back raises the nose, pushing forward lowers it. The
+		# actual torso counter-motion exchanges internal momentum, rather than
+		# assigning bike pitch or reading a desired world/landing attitude.
+		# A neutral stick holds the body-relative posture selected at takeoff.
+		# Brief wheel unloading across a whoop is still the ground riding task.
+		# Hold that posture instead of reversing fore/aft controls every crest.
+		if unsupported:
+			var air_control := smoothstep(float(config.VirtualRider.get("AirBodyPerceptionTime", 0.08)), float(config.VirtualRider.get("AirBodyPerceptionTime", 0.08)) + 0.04, _air_time)
+			_air_pitch_blend = maxf(_air_pitch_blend, air_control)
+		else:
+			_air_pitch_blend = move_toward(_air_pitch_blend, 0.0, dt / float(config.VirtualRider.get("GroundBodyHandoffTime", 0.35)))
+		var air_request := clampf(_air_body_reference - float(input.bodyForward) * float(config.VirtualRider.get("AirPitchTravel", 1.0)), -1.0, 1.0)
+		body_request = lerpf(_air_body_reference if unsupported and _air_pitch_blend == 0.0 else body_request, air_request, _air_pitch_blend)
 	# The reflex only changes a bounded real rider articulation; it applies
 	# no independent chassis pitch torque and receives no airborne feedback.
+	var pitch_move_rate := float(rider.MoveRate) * (float(config.VirtualRider.get("AirPitchMoveScale", 1.4)) if unsupported and _air_time >= float(config.VirtualRider.get("AirBodyPerceptionTime", 0.08)) and riding_mode == "virtual_rider" else 1.0)
 	var pitch_motion := _advance_rider_axis(_body_forward, body_request,
-		_rider_pitch_rate, float(rider.MaxPitch), float(rider.MoveRate),
+		_rider_pitch_rate, float(rider.MaxPitch), pitch_move_rate,
 		float(rider.PitchInertia), float(rider.MaxReactionTorque), dt)
 	var roll_motion := _advance_rider_axis(_body_lean, float(input.lean),
 		_rider_roll_rate, float(rider.MaxRoll), float(rider.MoveRate),
@@ -853,8 +982,8 @@ func _apply_rider_pose(pose_reset: bool = false) -> void:
 	var rider: Dictionary = config.Rider
 	var rider_position := Vector3(
 		_body_side * float(rider.SideTravel) + sin(_body_lean * float(rider.MaxRoll)) * 0.26,
-		0.54 + _standing * float(rider.StandingHeight),
-		0.09 - _body_forward * float(rider.ForeAftTravel))
+		0.54 + _standing * float(rider.StandingHeight) - _standing * maxf(0.0, _body_forward) * float(rider.get("ForwardCrouch", 0.08)),
+		0.09 - _body_forward * float(rider.ForeAftTravel) - _standing * float(rider.get("StandingForeOffset", 0.10)))
 	# The frame inertia/COM are constant. A fifth physical body carries the
 	# mass, so internal movement exchanges momentum through real paired forces.
 	var rider_rotation := Vector3(-_body_forward * float(rider.MaxPitch), _body_twist * float(rider.get("MaxYaw", deg_to_rad(30.0))),
@@ -982,6 +1111,9 @@ func _crash(reason: String) -> void:
 	crash_reason = reason
 	_crash_elapsed = 0
 	_steering_integral = 0.0
+	_landing_catch_pending = false
+	_landing_catch_remaining = 0.0
+	_active_torque_limit = float(config.VirtualRider.get("MaxTorque", 45.0))
 	_update_feet()
 
 func get_telemetry() -> Dictionary:
@@ -991,6 +1123,7 @@ func get_telemetry() -> Dictionary:
 	var relative := chassis.global_basis.inverse() * fork.global_basis
 	var speed := chassis.linear_velocity.length()
 	return {"speed": speed * 3.6, "speedMps": speed,
+		"activeTorqueLimit": _active_torque_limit, "landingCatchRemaining": _landing_catch_remaining,
 		"gear": int(drive_state.gear), "rpm": float(drive_state.engineOmega) * 30.0 / PI,
 		"clutch": float(controls.clutch), "stalled": bool(drive_state.stalled),
 		"frontCompression": float(front_suspension_state.get("compression", 0)),
@@ -1086,9 +1219,18 @@ func _apply_rider_support(target: Vector3) -> void:
 	var tune: Dictionary = config.get("RiderSupport", {})
 	var stiffness := Vector3(float(tune.get("SideStiffness", 12000)), lerpf(float(tune.get("SeatedVertical", 20000)), float(tune.get("StandingVertical", 5000)), _standing), float(tune.get("ForeStiffness", 4000)))
 	var damping := Vector3(float(tune.get("SideDamping", 1300)), float(tune.get("VerticalDamping", 350)), float(tune.get("ForeDamping", 200)))
-	# Preload is along the bike's own leg direction, never world-up. This
-	# preserves exactly paired internal forces even during free flight.
-	var local_force := local_error * stiffness - local_rate * damping + Vector3(0, float(config.RiderMass) * 9.81, 0)
+	# Leg weight compensation follows actual supported load and disappears
+	# promptly in free fall. Constant rider-weight preload in flight pushes
+	# the torso up and the bike down despite both bodies falling together.
+	# Spring, damping and weight forces always remain an internal pair.
+	var normal_load := (front_wheel.normal_load if front_wheel.contact else 0.0) + (rear_wheel.normal_load if rear_wheel.contact else 0.0)
+	var supported_weight := clampf(normal_load / ((float(config.BikeMass) + float(config.RiderMass)) * 9.81), 0.0, 1.0)
+	_rider_weight_support += (supported_weight - _rider_weight_support) * (1.0 - exp(-get_physics_process_delta_time() / float(tune.get("WeightSupportResponse", 0.04))))
+	var local_force := local_error * stiffness - local_rate * damping + Vector3(0, float(config.RiderMass) * 9.81 * _rider_weight_support, 0)
+	# Ground acceleration requires muscle effort to hold a chosen hip position;
+	# leaving this to the spring alone loses m*a/k (up to18cm) of forward reach.
+	# This is a finite internal leg effort, never an independent bike force.
+	local_force.z -= float(config.RiderMass) * _forward_acceleration * _rider_weight_support * _rider_drive_effort * float(tune.get("AccelerationSupport", 1.0))
 	var max_force := float(tune.get("MaxForce", 3500))
 	local_force = local_force.limit_length(max_force)
 	_rider_force = chassis.global_basis * local_force

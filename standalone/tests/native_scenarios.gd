@@ -254,8 +254,17 @@ func _test_stall_and_starter() -> void:
 	await _advance(1.0)
 	bike.shift_gear(1)
 	bike.set_controls({"clutch": 0.0, "throttle": 0.0, "frontBrake": 1.0, "rearBrake": 1.0, "footDown": true})
-	await _advance(1.0)
+	# Observe the actual grounded first-gear overload for at most two seconds.
+	# The lower closed-throttle calibration changes rundown time; it must
+	# still cross the unchanged physical stall threshold before using a starter.
+	var stall_time := 0.0
+	for frame: int in range(int(2.0 * HZ)):
+		await _next_tick()
+		stall_time = float(frame + 1) / HZ
+		if bool(bike.get_telemetry().stalled):
+			break
 	var stopped: Dictionary = bike.get_telemetry()
+	print("NATIVE braked first-gear stall: %.6f s, RPM=%.1f" % [stall_time, float(stopped.rpm)])
 	_check(bool(stopped.stalled), "Braked first-gear clutch engagement can stall the engine", "RPM=%.1f" % stopped.rpm)
 	_check(not bike.start_engine(), "Starter refuses engaged in-gear clutch")
 	bike.set_controls({"clutch": 1.0, "frontBrake": 1.0, "rearBrake": 1.0, "footDown": true})

@@ -45,13 +45,15 @@ func configure(chassis_body: Node3D, steering_fork: Node3D, front_wheel: Node3D,
 func _build_chassis() -> void:
 	# Twin rails, cradle, engine cases and subframe use real motorcycle
 	# proportions; wider radiator shrouds contrast the slim saddle/rear fender.
+	var steering_head := _chassis.to_local(_fork.global_position)
 	for side in [-1.0, 1.0]:
 		var x: float = side * 0.110
+		var frame_neck := Vector3(x, steering_head.y - 0.05, steering_head.z - 0.015)
 		for points in [
-			[Vector3(x, 0.31, -0.28), Vector3(x, -0.27, -0.24)],
+			[frame_neck, Vector3(x, -0.27, -0.24)],
 			[Vector3(x, -0.27, -0.24), Vector3(x, -0.28, 0.24)],
 			[Vector3(x, -0.28, 0.24), Vector3(x, 0.18, 0.13)],
-			[Vector3(x, 0.18, 0.13), Vector3(x, 0.31, -0.28)],
+			[Vector3(x, 0.18, 0.13), frame_neck],
 			[Vector3(x, 0.18, 0.13), Vector3(x, 0.22, 0.61)],
 			[Vector3(x, -0.10, 0.20), Vector3(x, 0.22, 0.61)]
 		]:

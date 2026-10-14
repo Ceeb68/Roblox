@@ -1,15 +1,15 @@
 # Dirtline MX
 
-A standalone Windows motocross simulation prototype, built with Godot 4.6.3 and Jolt Physics. Version 0.4 fixes the Xbox chase-camera pull-in, reduces unwanted lean after releasing steering, adds physical hip-twist control in the air, and expands the circuit to about 873 m with 3.2 m and 4.5 m tabletops. Helmet view and customizable controller bindings are included.
+A standalone Windows motocross simulation prototype, built with Godot 4.6.3 and Jolt Physics. Version 0.5 improves partial-stick turning, separates bike lean from rider counterbalance, corrects an uncommanded airborne pitch bias, and adds automatic feet and a more relaxed riding posture. The roughly 873 m circuit, larger tabletops, helmet view and customizable controller bindings are included.
 
 ![Dirtline MX physics prototype](downloads/DirtlineMX-preview.png)
 
 ## Play on Windows
 
-1. [Download Dirtline MX v0.4.0 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.4.0.zip).
+1. [Download Dirtline MX v0.5.0 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.5.0.zip).
 2. Right-click the ZIP and choose **Extract All**.
 3. Open the extracted folder and double-click **DirtlineMX.exe**. Keep its `.pck` file beside it.
-4. The bike starts in neutral with the clutch pulled and feet down. Press **E** for first, hold **W** to build revs, then hold **B** to release the clutch gradually. Raise your feet with **F** once moving.
+4. The bike starts in neutral with the clutch pulled and feet down. Press **E** for first, hold **W** to build revs, then hold **B** to release the clutch gradually. Feet lift automatically during launch and plant when you stop.
 
 Use **A/D** or the left stick to request bike lean; the virtual rider countersteers through the handlebars. **Z/X** moves the rider's upper body. Use **M / controller B** for first-person helmet view, **H** for help and **U** for suspension setup. Open **Escape / Start → Settings + controller binds → Controller bindings** to customize buttons, axes, inversion and deadzones. Preferences are saved on your computer. No Roblox installation or game editor is needed to play.
 
@@ -34,7 +34,7 @@ This is an early physics prototype. Numerical and native-engine tests establish 
 | Shift down / up | Q / E |
 | Bike lean command / rider lean | A–D / Z–X |
 | Rider forward–back / side | I–K / J–L |
-| Standing / feet | C / F |
+| Standing / seated | C |
 | Recover / engine starter | R / T |
 | Help / suspension setup | H / U |
 | Chase / first-person camera | M; controller B / Circle |

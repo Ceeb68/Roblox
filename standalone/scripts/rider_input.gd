@@ -10,12 +10,29 @@ var steer: float = 0.0
 var lean: float = 0.0
 var body_forward: float = 0.0
 var body_side: float = 0.0
-var standing: bool = false
+var standing: bool = false # Preferred riding posture; planted feet temporarily seat the rider.
 var foot_down: bool = true
 var controller_id: int = -1
 var controller_active: bool = false
 var _blocked_keys: Dictionary = {}
 var _blocked_pad: Dictionary = {}
+var _feet_stop_elapsed: float = 0.0
+var _feet_air_elapsed: float = 0.0
+var _feet_ground_seen: bool = false
+var _feet_launch_elapsed: float = 0.0
+var _feet_dab_elapsed: float = 0.0
+var _feet_dab_active: bool = false
+const FEET_RAISE_SPEED: float = 1.3
+const FEET_LOWER_SPEED: float = 0.65
+const FEET_STOP_DELAY: float = 0.45
+const FEET_AIR_DELAY: float = 0.08
+const FEET_MOUNT_CONTACT_GRACE: float = 0.35
+const FEET_LAUNCH_DELAY: float = 0.12
+const FEET_DAB_SPEED: float = 2.0
+const FEET_DAB_BANK: float = deg_to_rad(8.0)
+const FEET_DAB_RECOVER_BANK: float = deg_to_rad(4.0)
+const FEET_DAB_AWAY_RATE: float = 0.05
+const FEET_DAB_DELAY: float = 0.04
 
 func _init() -> void:
 	Input.joy_connection_changed.connect(_controller_connection_changed)
@@ -23,8 +40,12 @@ func _init() -> void:
 		"clutch_pull": KEY_V, "clutch_release": KEY_B, "clutch_quick": KEY_SHIFT,
 		"steer_left": KEY_A, "steer_right": KEY_D, "lean_left": KEY_Z, "lean_right": KEY_X,
 		"body_forward": KEY_I, "body_back": KEY_K, "body_left": KEY_J, "body_right": KEY_L,
-		"downshift": KEY_Q, "upshift": KEY_E, "stand": KEY_C, "feet": KEY_F, "recover": KEY_R,
+		"downshift": KEY_Q, "upshift": KEY_E, "stand": KEY_C, "recover": KEY_R,
 		"engine": KEY_T, "help": KEY_H, "setup": KEY_U, "pause": KEY_ESCAPE, "camera": KEY_M}
+	# Feet are a rider reflex, not a command. Remove a legacy action when
+	# restarting the project in an editor/session that had the old bindings.
+	if InputMap.has_action("mx_feet"):
+		InputMap.erase_action("mx_feet")
 	for action: String in keys:
 		var name_action: String = "mx_" + action
 		if not InputMap.has_action(name_action):
@@ -77,7 +98,7 @@ func command(event: InputEvent) -> String:
 		return ""
 	var action: String = ""
 	if event is InputEventKey:
-		for candidate: String in ["upshift", "downshift", "stand", "feet", "recover", "engine", "help", "setup", "pause", "camera"]:
+		for candidate: String in ["upshift", "downshift", "stand", "recover", "engine", "help", "setup", "pause", "camera"]:
 			if event.is_action_pressed("mx_" + candidate):
 				action = candidate
 				break
@@ -90,8 +111,73 @@ func command(event: InputEvent) -> String:
 func apply_command(action: String) -> void:
 	if action == "stand":
 		standing = not standing
-	elif action == "feet":
-		foot_down = not foot_down
+
+func update_auto_feet(delta: float, riding_state: Dictionary) -> void:
+	# This only changes real boot collision/support state. It adds no invisible
+	# balancing force or airborne support.
+	var dt := clampf(delta, 0.0, 0.1)
+	var speed := absf(float(riding_state.get("speedMps", 0.0)))
+	var front_contact := bool(riding_state.get("frontContact", false))
+	var rear_contact := bool(riding_state.get("rearContact", false))
+	if not is_finite(speed):
+		speed = FEET_RAISE_SPEED + 1.0
+	_feet_ground_seen = _feet_ground_seen or front_contact or rear_contact
+	_feet_air_elapsed = 0.0 if front_contact or rear_contact else _feet_air_elapsed + dt
+	# Native reset queues body poses; the contact cache can take a few frames
+	# to see the new ground. Give a stationary remount that first contact only.
+	# Riding speed and crashes still raise immediately during it.
+	var air_delay := FEET_AIR_DELAY if _feet_ground_seen else FEET_MOUNT_CONTACT_GRACE
+	# Lift during a deliberate clutch-engaged launch as a real rider would.
+	# Otherwise planted boot friction can prevent reaching the rolling-speed
+	# threshold. Throttle in neutral, a pulled clutch or a stalled engine does
+	# not count, so held controls cannot remove remount support by themselves.
+	var launching := front_contact and rear_contact and int(riding_state.get("gear", 0)) > 0 \
+		and throttle > 0.15 and clutch < 0.80 and not bool(riding_state.get("stalled", false))
+	_feet_launch_elapsed = _feet_launch_elapsed + dt if launching else 0.0
+	var unsafe_to_plant := bool(riding_state.get("crashed", false)) \
+		or speed >= FEET_DAB_SPEED or _feet_air_elapsed >= air_delay \
+		or _feet_launch_elapsed >= FEET_LAUNCH_DELAY
+	if unsafe_to_plant:
+		foot_down = false
+		_feet_stop_elapsed = 0.0
+		_feet_dab_elapsed = 0.0
+		_feet_dab_active = false
+		return
+	# A walking rider can put real boots down to catch a developing fall.
+	# Both positively loaded tires distinguish this from a wheelie, one-wheel
+	# touchdown or a slow jump apex. The short dwell rejects a noisy bank sample;
+	# hysteresis lets the physical boot support finish its catch before lifting.
+	var bank := float(riding_state.get("roll", 0.0))
+	var bank_rate := float(riding_state.get("bankRate", 0.0))
+	var loaded_ground := front_contact and rear_contact \
+		and float(riding_state.get("frontLoad", 0.0)) > 0.0 \
+		and float(riding_state.get("rearLoad", 0.0)) > 0.0
+	var valid_bank := is_finite(bank) and is_finite(bank_rate)
+	var falling_at_walk := loaded_ground and valid_bank and absf(bank) > FEET_DAB_BANK \
+		and signf(bank) * bank_rate > FEET_DAB_AWAY_RATE
+	_feet_dab_elapsed = _feet_dab_elapsed + dt if falling_at_walk else 0.0
+	if _feet_dab_elapsed >= FEET_DAB_DELAY:
+		_feet_dab_active = true
+	if _feet_dab_active:
+		if loaded_ground and valid_bank and absf(bank) > FEET_DAB_RECOVER_BANK:
+			foot_down = true
+			_feet_stop_elapsed = 0.0
+			return
+		_feet_dab_active = false
+		_feet_dab_elapsed = 0.0
+		foot_down = false
+	if speed > FEET_RAISE_SPEED:
+		foot_down = false
+		_feet_stop_elapsed = 0.0
+		return
+	# Two tire contacts and a lower speed threshold distinguish a stop from a
+	# wheelie, jump apex or brief landing/bump. The dwell prevents boot flicker.
+	if front_contact and rear_contact and speed < FEET_LOWER_SPEED:
+		_feet_stop_elapsed += dt
+		if _feet_stop_elapsed >= FEET_STOP_DELAY:
+			foot_down = true
+	else:
+		_feet_stop_elapsed = 0.0
 
 func tick(delta: float, enabled: bool) -> Dictionary:
 	if controller_active and not controller_id in Input.get_connected_joypads():
@@ -145,7 +231,7 @@ func release_controls() -> void:
 func packet() -> Dictionary:
 	return {"throttle": throttle, "frontBrake": front_brake, "rearBrake": rear_brake,
 		"clutch": clutch, "steer": steer, "lean": lean, "bodyForward": body_forward,
-		"bodySide": body_side, "standing": standing, "footDown": foot_down}
+		"bodySide": body_side, "standing": standing and not foot_down, "footDown": foot_down}
 
 func _controller_connection_changed(device: int, connected: bool) -> void:
 	if not connected and device == controller_id:
@@ -161,6 +247,12 @@ func reset_for_recovery() -> void:
 	release_controls()
 	standing = false
 	foot_down = true
+	_feet_stop_elapsed = 0.0
+	_feet_air_elapsed = 0.0
+	_feet_ground_seen = false
+	_feet_launch_elapsed = 0.0
+	_feet_dab_elapsed = 0.0
+	_feet_dab_active = false
 	_blocked_keys.clear()
 	_blocked_pad.clear()
 	for action: StringName in InputMap.get_actions():

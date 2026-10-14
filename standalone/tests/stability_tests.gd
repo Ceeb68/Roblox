@@ -6,6 +6,7 @@ extends SceneTree
 
 const Bike = preload("res://scripts/bike_controller.gd")
 const Track = preload("res://scripts/track_builder.gd")
+const RiderInput = preload("res://scripts/rider_input.gd")
 const HZ := 240.0
 var cfg: Dictionary
 var world: Node3D
@@ -85,7 +86,7 @@ func _new_bike(kind: String = "flat", position: Vector3 = Vector3(0.0, 0.82, 0.0
 			wheel.call("invalidate_load_history")
 	bike.set_controls({"clutch": 1.0, "footDown": false, "standing": standing, "bodyForward": body_forward})
 
-func _ride(label: String, seconds: float, input_kind: String = "neutral", input_overrides: Dictionary = {}) -> Dictionary:
+func _ride(label: String, seconds: float, input_kind: String = "neutral", input_overrides: Dictionary = {}, automatic_feet: bool = false) -> Dictionary:
 	var origin: Vector3 = bike.chassis.global_position
 	var previous_position := origin
 	var path_distance := 0.0
@@ -115,6 +116,10 @@ func _ride(label: String, seconds: float, input_kind: String = "neutral", input_
 	var rear_load_methods: Dictionary = {}
 	var completed_ticks := 0
 	var samples: Array[Dictionary] = []
+	var feet_driver: RefCounted = RiderInput.new() if automatic_feet else null
+	if feet_driver != null:
+		feet_driver.standing = bool(bike.controls.standing)
+		feet_driver.foot_down = false
 	for i: int in range(roundi(seconds * HZ)):
 		var time := float(i) / HZ
 		var packet := {"steer": 0.0, "lean": 0.0, "frontBrake": 0.0, "rearBrake": 0.0,
@@ -149,6 +154,19 @@ func _ride(label: String, seconds: float, input_kind: String = "neutral", input_
 			packet.throttle = 0.45
 			packet.clutch = clampf(1.0 - time / 0.75, 0.0, 1.0)
 		packet.merge(input_overrides, true)
+		if feet_driver != null:
+			# Exactly the shipped foot lifecycle, preserving these same coasting
+			# throttle/clutch/body inputs and the player's standing preference.
+			feet_driver.throttle = float(packet.throttle)
+			feet_driver.clutch = float(packet.clutch)
+			feet_driver.front_brake = float(packet.frontBrake)
+			feet_driver.rear_brake = float(packet.rearBrake)
+			feet_driver.steer = float(packet.steer)
+			feet_driver.lean = float(packet.lean)
+			feet_driver.body_forward = float(packet.bodyForward)
+			feet_driver.body_side = float(packet.bodySide)
+			feet_driver.update_auto_feet(1.0 / HZ, bike.get_telemetry())
+			packet = feet_driver.packet()
 		bike.set_controls(packet)
 		await _tick()
 		completed_ticks += 1
@@ -221,6 +239,9 @@ func _ride(label: String, seconds: float, input_kind: String = "neutral", input_
 		"peakFrontLoad": peak_front_load, "peakRearLoad": peak_rear_load,
 		"frontLoadMethods": front_load_methods, "rearLoadMethods": rear_load_methods,
 		"airborneTicks": airborne_ticks, "surfaces": seen_surfaces.keys(),
+		"automaticFeet": automatic_feet, "finalFootDown": final.footDown,
+		"preferredStanding": feet_driver.standing if feet_driver != null else bool(final.standing),
+		"finalStanding": final.standing,
 		"crashed": final.crashed, "crashReason": final.crashReason, "samples": samples}
 	results.append(result)
 	print("STABILITY %s: %.2f s, %.1f m, max bank %.1f deg, single/air contacts %d/%d, crash=%s" % [
@@ -232,7 +253,7 @@ func _check_ride(result: Dictionary, seconds: float, minimum_distance: float,
 		maximum_bank: float = 40.0) -> void:
 	var label := String(result.label)
 	_check(not bool(result.crashed) and float(result.seconds) >= seconds,
-		label + " stays rideable with feet raised", String(result.crashReason))
+		label + (" stays rideable through the automatic foot lifecycle" if bool(result.get("automaticFeet", false)) else " stays rideable with feet raised"), String(result.crashReason))
 	_check(float(result.distance) > minimum_distance, label + " crosses actual ground",
 		"%.1f m" % result.distance)
 	_check(float(result.maxRoll) < deg_to_rad(maximum_bank), label + " avoids an excessive uncommanded bank",
@@ -329,6 +350,21 @@ func _run() -> void:
 		"Whoops exercise real suspension compression and rebound")
 	_check(int(whoops.singleContactTicks) + int(whoops.airborneTicks) > 30,
 		"Whoops exercise repeated native contact loss")
+	# Keep the original five-second feet-UP engineering episode above. This
+	# additional episode follows the actual game's automatic legs over the
+	# same five seconds, without adding throttle or replacing motion. A stop
+	# perched over a deep whoop valley can exceed real boot reach; flat-stop
+	# support is checked separately in automated_feet_tests.
+	await _new_bike("circuit", Vector3(-34.0, 0.95, -19.0), Basis.IDENTITY, 8.0, true)
+	var automatic_coast := await _ride("Shipped whoops with automatic legs", 5.0, "neutral", {}, true)
+	_check_ride(automatic_coast, 5.0, 18.0, 45.0)
+	_check(bike.chassis.global_position.z < -35.0 and absf(bike.chassis.global_position.x + 34.0) < 5.0,
+		"Automatic-leg coasting traverses three actual whoop crests inside the original lane")
+	_check(absf(float(automatic_coast.finalRoll)) < deg_to_rad(20.0), "Automatic-leg coasting finishes with a recoverable physical bank")
+	_check(float(automatic_coast.frontTravelRange) > 0.065 and float(automatic_coast.rearTravelRange) > 0.065,
+		"Automatic-leg coasting still exercises both real suspension ends")
+	_check(bool(automatic_coast.preferredStanding) and bool(automatic_coast.finalStanding) == not bool(automatic_coast.finalFootDown),
+		"Actual coasting packet applies automatic feet without losing standing preference")
 	await _new_bike("circuit", Vector3(46.75, 0.95, -42.0), Basis(Vector3.UP, PI), 6.0, true)
 	var rut := await _ride("Shipped rut entry and exit", 4.4)
 	_check_ride(rut, 4.4, 18.0)

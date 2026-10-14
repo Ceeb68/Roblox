@@ -163,9 +163,14 @@ func _limiter() -> void:
 
 func _stall() -> void:
 	var state: Dictionary = Drive.new_state(cfg)
-	state.gear = 1
+	# This isolated rear rotor has no ground or vehicle/front-brake load.
+	# A high-gear clutch dump makes the real 190 Nm rear brake exceed the
+	# bounded idle governor: 190 / (3.35 * 1.06 * 3.85) = 13.9 Nm at the
+	# crank versus 10 Nm maximum idle combustion. First gear's larger ratio
+	# reflects less braking and can spin this free rotor beyond one second.
+	state.gear = cfg.GearRatios.size()
 	_run_drive(state, {"rearBrake": 1.0}, 0.0, 1.0)
-	_check(bool(state.stalled) and float(state.engineOmega) < float(cfg.StallRPM) * RPM, "Clutch dump physically stalls")
+	_check(bool(state.stalled) and float(state.engineOmega) < float(cfg.StallRPM) * RPM, "High-gear clutch overload physically stalls")
 	_run_drive(state, {"throttle": 1.0, "clutch": 1.0}, 0.0, 0.5)
 	_check(bool(state.stalled), "Throttle does not silently restart")
 
