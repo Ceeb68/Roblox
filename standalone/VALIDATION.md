@@ -2,6 +2,68 @@
 
 The cloud machine can execute the actual Linux Godot/Jolt engine and render the native game window with software OpenGL. It cannot execute a Windows desktop or evaluate riding feel as a human rider. Keep those outcomes separate.
 
+## Version 0.4 camera, handling and larger jumps
+
+The chase-camera collision query now tests the world collision layer and excludes
+all five native bike bodies, including the physical rider and fork. Previously,
+moving the rider into that ray could retract the camera from about 4.7 m to
+0.16 m even with the chassis stationary. Xbox stick input does not change the
+camera orbit; terrain occlusion and deliberate mouse orbit still work.
+The 93 input/camera checks also exercise selected-controller routing, remapping,
+visible physical hip twist, anatomical limb lengths and fixed grip targets.
+These tests do not use a physical Xbox controller.
+
+Releasing a turn now lets measured banking and yaw settle before the virtual
+rider captures the new travel line. It no longer immediately tries to undo the
+last turn. After sustained unsupported flight, stale ground steering history
+clears; first loaded touchdown captures the actual travel line once, then
+gradually resumes heading feedback. Positive but light front-wheel load retains
+finite handlebar authority. All these corrections act through bounded, paired
+steering torque; tire friction and combined-force limits are unchanged. There
+are still five independent native bodies, compliant rider support and separate
+front/rear suspension. There is no frame pose lock or airborne landing alignment.
+
+Unsupported body-side input now requests relative hip twist through finite
+paired torso torque. The visible rider follows actual physical yaw rather than
+displaying the command before the body moves. Opposite inputs can bring a whip
+back; neutral input does not automatically align the bike with the landing.
+The 203-check rideability suite includes twelve analog turn/release/reversal
+cases at 4, 8 and 12 m/s and five unsupported whip cases. Turn response was
+0.254–1.325 s; unwanted opposite bank after release stayed around 2.3° or less
+in those cases. Combined airborne inputs produced about 6.5° bank and 4.8° yaw,
+with counterinput ending near ±1.7° bank. These are finite test scenarios, not
+universal handling guarantees. Existing 42 playability and 194 stability guards
+retain their limits. The 67 recovery checks additionally require all new twist,
+turn-capture and landing-reference state to clear on remount.
+
+The course is now 872.5 m with fourteen ordered gates, original proving stations
+and new 3.2 m and 4.5 m tabletops. Their road is 15 m wide with 2 m graded
+shoulders on each side. The larger jump has a 42 m landing and 30 m flat runoff:
+the earlier shorter curve demanded downward acceleration greater than gravity
+at the test speed, unloading the wheels again after touchdown.
+The 178-check track suite includes 4,584 native collision rays and eighteen
+powered rides: both new jumps, 20/21/22 m/s rolling approaches and neutral or
+±0.15 fore/aft body input. Initial body velocities are seeded once; timed manual
+third-gear/clutch inputs, native suspension and contact govern the actual ride.
+All eighteen runs landed and reached the runoff without crashes; full flight
+lasted 0.933–1.125 s and maximum bank was 26.99°. Some rides used a shoulder;
+minimum outer prepared-edge clearance was 1.492 m. Overspeed and aggressive
+inputs can still crash. Human obstacle acceptance remains required.
+
+The current coupled-rider diagnostic measures peak angular-momentum drift of
+about 1.88% at 240 Hz and 1.15% at 480 Hz, within the existing 2% engineering
+bound. Its damping-work calculation now uses the actual separate pitch/yaw/roll
+damping coefficients; kinetic-work residual remains below the existing 1% limit.
+No earlier conservation thresholds were weakened.
+
+The complete workflow covers 2,895 checks: 1,635 SI math, 50 gyro, 40 rider
+dynamics, 81 native mechanical, 262 contact/load, 178 track/jump, 20 handling,
+30 sensor, 93 input/camera, 42 playability, 203 rideability, 194 stability and
+67 recovery. [ENGINE_ASSESSMENT.md](ENGINE_ASSESSMENT.md) records 24 isolated
+Jolt/Godot Physics observations. They do not establish that a backend switch
+improves the complete motorcycle. Unity and Unreal were not tested. The older
+release measurements below are historical baselines, not current-build results.
+
 ## Version 0.2 handling and player workflow
 
 This section records the previous release baseline. Version 0.3 results and the

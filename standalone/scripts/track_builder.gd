@@ -13,6 +13,14 @@ const WEST_X := -34.0
 const EAST_X := 46.0
 const STRAIGHT_END := 42.0
 const LOOP_EDGE := STRAIGHT_END + LOOP_RADIUS
+const EXTENDED_STRAIGHT_END := 280.0
+const EXTENDED_LOOP_EDGE := EXTENDED_STRAIGHT_END + LOOP_RADIUS
+const EXTENSION_ROAD_HALF_WIDTH := 7.5
+const COURSE_LENGTH_METRES := 2.0 * (EXTENDED_STRAIGHT_END + STRAIGHT_END) + TAU * LOOP_RADIUS + 40.0
+const EXTENSION_JUMPS := [
+	{"name": "PROGRESSION TABLETOP", "start": 88.0, "takeoff": 16.0, "deck": 16.0, "landing": 24.0, "height": 3.2},
+	{"name": "BIG TABLETOP", "start": 168.0, "takeoff": 20.0, "deck": 20.0, "landing": 42.0, "height": 4.5},
+]
 const LARGE_JUMP_X := 62.0
 const PRACTICE_X := -63.0
 const DIRT := Color(0.43, 0.29, 0.16)
@@ -30,8 +38,8 @@ static func build(parent: Node3D) -> Dictionary:
 	var world := Node3D.new()
 	world.name = "DirtlineProvingGround"
 	parent.add_child(world)
-	_box_surface(world, "GrassBase", Vector3(0.0, GROUND_HEIGHT - 0.5, 0.0),
-		Vector3(310.0, 1.0, 280.0), "grass", GRASS)
+	_box_surface(world, "GrassBase", Vector3(0.0, GROUND_HEIGHT - 0.5, 112.0),
+		Vector3(350.0, 1.0, 520.0), "grass", GRASS)
 	_build_main_ribbon(world)
 	_build_practice_ground(world)
 	_build_large_jump(world)
@@ -45,12 +53,18 @@ static func build(parent: Node3D) -> Dictionary:
 	gates.append(_gate(world, 3, Vector3(EAST_X, ROAD_HEIGHT, -30.0), Vector3.BACK, "RUT CHANNELS"))
 	gates.append(_gate(world, 4, Vector3(EAST_X, ROAD_HEIGHT, -17.0), Vector3.BACK, "TABLETOP APPROACH"))
 	gates.append(_gate(world, 5, Vector3(EAST_X, ROAD_HEIGHT, 27.0), Vector3.BACK, "LANDING EXIT"))
-	gates.append(_gate(world, 6, Vector3(6.0, ROAD_HEIGHT, LOOP_EDGE), Vector3.LEFT, "TRACTION STRAIGHT"))
+	gates.append(_gate(world, 6, Vector3(EAST_X, ROAD_HEIGHT, 77.0), Vector3.BACK, "PROGRESSION APPROACH"))
+	gates.append(_gate(world, 7, Vector3(EAST_X, ROAD_HEIGHT, 159.0), Vector3.BACK, "BIG TABLETOP APPROACH"))
+	gates.append(_gate(world, 8, Vector3(EAST_X, ROAD_HEIGHT, 264.0), Vector3.BACK, "BRAKING ZONE"))
+	gates.append(_gate(world, 9, Vector3(6.0, ROAD_HEIGHT, EXTENDED_LOOP_EDGE), Vector3.LEFT, "SOUTH TURNAROUND"))
 	var last_angle := deg_to_rad(157.5)
 	var last_position := Vector3(-4.0 + LOOP_RADIUS * cos(last_angle),
 		ROAD_HEIGHT + _corner_bank(0.75) * ROAD_HALF_WIDTH,
-		STRAIGHT_END + LOOP_RADIUS * sin(last_angle))
-	gates.append(_gate(world, 7, last_position, Vector3(-sin(last_angle), 0.0, cos(last_angle)), "SOUTH BERM"))
+		EXTENDED_STRAIGHT_END + LOOP_RADIUS * sin(last_angle))
+	gates.append(_gate(world, 10, last_position, Vector3(-sin(last_angle), 0.0, cos(last_angle)), "SOUTH BERM"))
+	gates.append(_gate(world, 11, Vector3(WEST_X, ROAD_HEIGHT, 253.0), Vector3.FORWARD, "RETURN STRAIGHT"))
+	gates.append(_gate(world, 12, Vector3(WEST_X, ROAD_HEIGHT + _return_rollers_height(172.0), 172.0), Vector3.FORWARD, "ROLLING RHYTHM"))
+	gates.append(_gate(world, 13, Vector3(WEST_X, ROAD_HEIGHT, 77.0), Vector3.FORWARD, "FINISH APPROACH"))
 	var stations: Array = [
 		_station(world, "00 / PRACTICE GROUND", "100 m flat straight • wide launch pad", Vector3(-77.0, 0.0, 19.0), 0.0),
 		_station(world, "01 / BRAKING BUMPS", "0.12–0.22 m • independent brakes", Vector3(-44.0, 0.0, -9.0), 0.0),
@@ -60,26 +74,23 @@ static func build(parent: Node3D) -> Dictionary:
 		_station(world, "05 / TABLETOP", "1.3 m high • 10 m deck • 16 m landing", Vector3(35.0, 0.0, -2.0), PI),
 		_station(world, "06 / LARGE JUMP", "2.6 m lip • 30 m run-up • 24 m landing", Vector3(73.0, 0.0, -31.0), 0.0),
 		_station(world, "07 / TRACTION PADS", "HARDPACK / SAND / MUD / LOAM", Vector3(0.0, 0.0, 27.0), 0.0),
+		_station(world, "08 / PROGRESSION TABLETOP", "3.2 m high • 15 m wide • 24 m landing", Vector3(60.0, 0.0, 91.0), 0.0),
+		_station(world, "09 / BIG TABLETOP", "4.5 m high • 15 m wide • 42 m landing", Vector3(60.0, 0.0, 171.0), 0.0),
+		_station(world, "10 / SOUTH TURNAROUND", "30 m radius • brake before the berm", Vector3(59.0, 0.0, 274.0), 0.0),
+		_station(world, "11 / ROLLING RHYTHM", "0.6–1.2 m rollers • 18 m spacing", Vector3(-45.0, 0.0, 222.0), 0.0),
 	]
 	return {"spawn": Transform3D(Basis.IDENTITY, Vector3(WEST_X, 0.95, 34.0)),
 		"practice_spawn": Transform3D(Basis.IDENTITY, Vector3(PRACTICE_X, 0.95, 34.0)),
 		"gates": gates, "stations": stations,
-		"circuit_width": ROAD_HALF_WIDTH * 2.0, "flat_launch_length": 40.0}
+		"circuit_width": ROAD_HALF_WIDTH * 2.0, "flat_launch_length": 40.0,
+		"course_length_m": COURSE_LENGTH_METRES, "extension_circuit_width": EXTENSION_ROAD_HALF_WIDTH * 2.0,
+		"jump_heights_m": [1.3, 2.6, 3.2, 4.5]}
 
 
 static func _build_main_ribbon(parent: Node3D) -> void:
 	# Shared rows keep the collision continuous across changes of material and
 	# obstacles. One indexed mesh/concave collider per surface, not stacked boxes.
-	var rows: Array = []
-	_add_line(rows, Vector2(WEST_X, STRAIGHT_END), Vector2(WEST_X, -STRAIGHT_END), 168)
-	_add_arc(rows, Vector2(-4.0, -STRAIGHT_END), PI, PI * 1.5, 48)
-	_add_line(rows, Vector2(-4.0, -LOOP_EDGE), Vector2(16.0, -LOOP_EDGE), 24)
-	_add_arc(rows, Vector2(16.0, -STRAIGHT_END), -PI * 0.5, 0.0, 48)
-	_add_line(rows, Vector2(EAST_X, -STRAIGHT_END), Vector2(EAST_X, STRAIGHT_END), 168)
-	_add_arc(rows, Vector2(16.0, STRAIGHT_END), 0.0, PI * 0.5, 48)
-	_add_line(rows, Vector2(16.0, LOOP_EDGE), Vector2(-4.0, LOOP_EDGE), 24)
-	_add_arc(rows, Vector2(-4.0, STRAIGHT_END), PI * 0.5, PI, 48)
-	rows.append(rows[0])
+	var rows := _main_rows()
 	var builders: Dictionary = {}
 	for surface in ["dirt", "sand", "mud", "hardpack", "loam"]:
 		var tool := SurfaceTool.new()
@@ -95,6 +106,8 @@ static func _build_main_ribbon(parent: Node3D) -> void:
 		var midpoint: Vector2 = (first.center + second.center) * 0.5
 		var surface := _main_surface(midpoint)
 		var tool: SurfaceTool = builders[surface]
+		var first_width := _ribbon_road_half_width(first)
+		var second_width := _ribbon_road_half_width(second)
 		for column in range(COLUMNS):
 			var u0 := lerpf(-7.0, 7.0, float(column) / COLUMNS)
 			var u1 := lerpf(-7.0, 7.0, float(column + 1) / COLUMNS)
@@ -102,11 +115,35 @@ static func _build_main_ribbon(parent: Node3D) -> void:
 			var b := _ribbon_vertex(first, u1)
 			var c := _ribbon_vertex(second, u0)
 			var d := _ribbon_vertex(second, u1)
+			var first_u0 := u0 * (first_width + SHOULDER_WIDTH) / 7.0
+			var first_u1 := u1 * (first_width + SHOULDER_WIDTH) / 7.0
+			var second_u0 := u0 * (second_width + SHOULDER_WIDTH) / 7.0
+			var second_u1 := u1 * (second_width + SHOULDER_WIDTH) / 7.0
 			# _triangle emits clockwise front faces for Godot's native triangle shape.
-			_triangle(tool, a, b, c, surface, u0, u1, u0)
-			_triangle(tool, b, d, c, surface, u1, u1, u0)
+			_triangle(tool, a, b, c, surface, first_u0, first_u1, second_u0,
+				Vector3(first_width, first_width, second_width))
+			_triangle(tool, b, d, c, surface, first_u1, second_u1, second_u0,
+				Vector3(first_width, second_width, second_width))
 	for surface: String in builders:
 		_finish_surface(parent, "Circuit_" + surface, builders[surface], surface)
+
+
+static func _main_rows() -> Array:
+	# The former 396 m proving loop keeps its complete north half. The southern
+	# return moves 238 m outwards, making a connected 873 m lap rather than
+	# enlarging the motorcycle or placing disconnected ramps on the grass.
+	var rows: Array = []
+	_add_line(rows, Vector2(WEST_X, STRAIGHT_END), Vector2(WEST_X, -STRAIGHT_END), 168)
+	_add_arc(rows, Vector2(-4.0, -STRAIGHT_END), PI, PI * 1.5, 48)
+	_add_line(rows, Vector2(-4.0, -LOOP_EDGE), Vector2(16.0, -LOOP_EDGE), 24)
+	_add_arc(rows, Vector2(16.0, -STRAIGHT_END), -PI * 0.5, 0.0, 48)
+	_add_line(rows, Vector2(EAST_X, -STRAIGHT_END), Vector2(EAST_X, EXTENDED_STRAIGHT_END), 644)
+	_add_arc(rows, Vector2(16.0, EXTENDED_STRAIGHT_END), 0.0, PI * 0.5, 48)
+	_add_line(rows, Vector2(16.0, EXTENDED_LOOP_EDGE), Vector2(-4.0, EXTENDED_LOOP_EDGE), 24)
+	_add_arc(rows, Vector2(-4.0, EXTENDED_STRAIGHT_END), PI * 0.5, PI, 48)
+	_add_line(rows, Vector2(WEST_X, EXTENDED_STRAIGHT_END), Vector2(WEST_X, STRAIGHT_END), 476)
+	rows.append(rows[0])
+	return rows
 
 
 static func _add_line(rows: Array, start: Vector2, finish: Vector2, steps: int) -> void:
@@ -133,16 +170,29 @@ static func _ribbon_vertex(row: Dictionary, lateral: float) -> Vector3:
 	var center: Vector2 = row.center
 	var forward: Vector2 = row.direction
 	var right := Vector2(-forward.y, forward.x)
+	var half_width := _ribbon_road_half_width(row)
+	lateral *= (half_width + SHOULDER_WIDTH) / 7.0
 	var position := center + right * lateral
-	var shoulder := _smoothstep(ROAD_HALF_WIDTH, ROAD_HALF_WIDTH + SHOULDER_WIDTH, absf(lateral))
-	var height := ROAD_HEIGHT + float(row.bank) * (ROAD_HALF_WIDTH - lateral)
+	var shoulder := _smoothstep(half_width, half_width + SHOULDER_WIDTH, absf(lateral))
+	var height := ROAD_HEIGHT + float(row.bank) * (half_width - lateral)
 	if is_equal_approx(center.x, WEST_X):
-		height += _west_obstacle(center.y)
+		height += _west_obstacle(center.y) + _return_rollers_height(center.y)
 	elif is_equal_approx(center.x, EAST_X):
-		height += _tabletop_height(center.y)
+		height += _tabletop_height(center.y) + _extension_jump_height(center.y)
 		var rut_envelope := _window(center.y, -40.0, -25.0, 1.5)
 		height -= 0.16 * rut_envelope * maxf(_rut(lateral - 0.75), _rut(lateral + 0.75))
 	return Vector3(position.x, lerpf(height, GROUND_HEIGHT, shoulder), position.y)
+
+
+static func _ribbon_road_half_width(row: Dictionary) -> float:
+	var center: Vector2 = row.center
+	if not is_equal_approx(center.x, EAST_X):
+		return ROAD_HALF_WIDTH
+	# Both bigger takeoffs and their entire landings use 15 m of level dirt.
+	# Width tapers along flat approaches/runoff, leaving old native proving
+	# sections and both 30 m-radius bends exactly at their original width.
+	return lerpf(ROAD_HALF_WIDTH, EXTENSION_ROAD_HALF_WIDTH,
+		_window(center.y, 58.0, 278.0, 18.0))
 
 
 static func _west_obstacle(z: float) -> float:
@@ -169,6 +219,36 @@ static func _tabletop_height(z: float) -> float:
 	return 0.0
 
 
+static func _extension_jump_height(z: float) -> float:
+	for jump: Dictionary in EXTENSION_JUMPS:
+		var start: float = jump.start
+		var lip: float = start + float(jump.takeoff)
+		var landing_start: float = lip + float(jump.deck)
+		var finish: float = landing_start + float(jump.landing)
+		var height: float = jump.height
+		if z >= start and z < lip:
+			# Convex takeoff, with zero initial slope and a real upward lip tangent.
+			# A filled tabletop rewards airtime but an undershoot still meets soil.
+			return height * pow((z - start) / float(jump.takeoff), 1.8)
+		if z >= lip and z <= landing_start:
+			return height
+		if z > landing_start and z < finish:
+			return height * (1.0 - _smoothstep(landing_start, finish, z))
+	return 0.0
+
+
+static func _return_rollers_height(z: float) -> float:
+	# The south-to-north return has broad, low rollers instead of another
+	# abrupt whoop field. Each mound joins the level road with zero slope.
+	var heights := [0.6, 0.9, 1.2, 0.9]
+	for index in range(heights.size()):
+		var center := 224.0 - float(index) * 18.0
+		var distance := absf(z - center)
+		if distance < 7.0:
+			return float(heights[index]) * (0.5 + 0.5 * cos(PI * distance / 7.0))
+	return 0.0
+
+
 static func _rut(distance: float) -> float:
 	return 0.5 + 0.5 * cos(PI * clampf(absf(distance) / 0.35, 0.0, 1.0))
 
@@ -176,7 +256,7 @@ static func _rut(distance: float) -> float:
 static func _main_surface(point: Vector2) -> String:
 	if point.y < -LOOP_EDGE + 0.1:
 		return "sand"
-	if point.y > LOOP_EDGE - 0.1:
+	if point.y > EXTENDED_LOOP_EDGE - 0.1:
 		return "mud" if point.x > 6.0 else "hardpack"
 	if point.x > EAST_X - 0.1 and point.y < -24.5:
 		return "loam"
@@ -353,8 +433,9 @@ static func _build_scenery(parent: Node3D) -> void:
 	crowns.instance_count = trees
 	for index in range(trees):
 		var angle := float(index) / trees * TAU + rng.randf_range(-0.04, 0.04)
-		var radius := rng.randf_range(108.0, 143.0)
-		var location := Vector3(cos(angle) * radius, GROUND_HEIGHT, sin(angle) * radius)
+		var x_radius := rng.randf_range(136.0, 162.0)
+		var z_radius := rng.randf_range(227.0, 250.0)
+		var location := Vector3(cos(angle) * x_radius, GROUND_HEIGHT, 112.0 + sin(angle) * z_radius)
 		var scale := rng.randf_range(0.7, 1.45)
 		var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3.ONE * scale)
 		trunks.set_instance_transform(index, Transform3D(basis, location + Vector3.UP * 1.15 * scale))
@@ -366,15 +447,15 @@ static func _build_scenery(parent: Node3D) -> void:
 		parent.add_child(node)
 	for index in range(11):
 		var angle := float(index) / 11.0 * TAU
-		var position := Vector3(cos(angle) * 188.0, -4.0, sin(angle) * 174.0)
+		var position := Vector3(cos(angle) * 222.0, -4.0, 112.0 + sin(angle) * 301.0)
 		_mountain(parent, position, rng.randf_range(32.0, 60.0), rng.randf_range(22.0, 38.0), index)
 	# Soft-boundary stake/ribbon fence is scenery, away from the usable shoulder.
 	for side in [-1.0, 1.0]:
-		for index in range(18):
+		for index in range(45):
 			var z := -77.0 + index * 9.0
 			var x := -99.0 if side < 0.0 else 83.0
 			_pole(parent, Vector3(x, GROUND_HEIGHT, z), 0.8, CREAM)
-			if index < 17:
+			if index < 44:
 				_visual_box(parent, Vector3(x, 0.4, z + 4.5), Vector3(0.035, 0.08, 9.0), ORANGE)
 	_visual_box(parent, Vector3(0.0, 2.0, -82.12), Vector3(18.0, 3.0, 0.1), INK)
 	for sign in [-1.0, 1.0]:
@@ -437,20 +518,22 @@ static func _station(parent: Node3D, title: String, detail: String, position: Ve
 
 
 static func _triangle(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, surface: String,
-		u0: float, u1: float, u2: float) -> void:
+		u0: float, u1: float, u2: float, road_widths: Vector3 = Vector3(5.0, 5.0, 5.0)) -> void:
 	# Godot's clockwise face normal is the negative of the conventional cross
 	# product. Reverse the mathematical +Y order for upward native contact.
 	var vertices := [a, c, b]
 	var laterals := [u0, u2, u1]
+	var half_widths := [road_widths.x, road_widths.z, road_widths.y]
 	for index in range(3):
 		var vertex: Vector3 = vertices[index]
 		var color := _surface_color(surface)
 		# Deterministic vertex tint gives soil variation without a texture download.
 		var variation := sin(vertex.x * 1.7 + vertex.z * 0.63) * 0.035
 		color = color.lightened(variation) if variation > 0.0 else color.darkened(-variation)
-		if absf(float(laterals[index])) > ROAD_HALF_WIDTH:
-			color = color.lerp(GRASS, _smoothstep(ROAD_HALF_WIDTH,
-				ROAD_HALF_WIDTH + SHOULDER_WIDTH, absf(float(laterals[index]))))
+		var half_width: float = half_widths[index]
+		if absf(float(laterals[index])) > half_width:
+			color = color.lerp(GRASS, _smoothstep(half_width,
+				half_width + SHOULDER_WIDTH, absf(float(laterals[index]))))
 		elif surface == "hardpack" and vertex.x < -40.9:
 			# The practice ground's shoulder has the same natural soil-to-grass
 			# transition as the loop, while its central riding line stays level.

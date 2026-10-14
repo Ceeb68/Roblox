@@ -73,9 +73,11 @@ var _rider_collision: CollisionShape3D
 var _body_forward: float = 0.0
 var _body_side: float = 0.0
 var _body_lean: float = 0.0
+var _body_twist: float = 0.0
 var _standing: float = 0.0
 var _rider_pitch_rate: float = 0.0
 var _rider_roll_rate: float = 0.0
+var _rider_yaw_rate: float = 0.0
 var _last_air_velocity := Vector3.ZERO
 var _air_time: float = 0.0
 var _last_rear_slide: bool = false
@@ -96,6 +98,13 @@ var _steering_integral: float = 0.0
 var _rider_heading := Vector3.FORWARD
 var _rider_line_origin := Vector3.ZERO
 var _heading_correction: float = 0.0
+var _line_capture_pending: bool = false
+var _line_settle_time: float = 0.0
+var _line_from_player_turn: bool = false
+var _line_ground_seen: bool = false
+var _landing_line_pending: bool = false
+var _landing_line_active: bool = false
+var _landing_line_elapsed: float = 0.0
 var _bank_intent: float = 0.0
 var _slip_feedforward: float = 0.0
 var _front_support: float = 0.0
@@ -291,9 +300,11 @@ func _reset_models() -> void:
 	_body_forward = 0
 	_body_side = 0
 	_body_lean = 0
+	_body_twist = 0.0
 	_standing = 0
 	_rider_pitch_rate = 0
 	_rider_roll_rate = 0
+	_rider_yaw_rate = 0.0
 	_rider_force = Vector3.ZERO
 	_rider_torque = Vector3.ZERO
 	_rider_reference_transform = Transform3D(Basis.IDENTITY, RIDER_ORIGIN)
@@ -302,6 +313,13 @@ func _reset_models() -> void:
 	_last_rear_slide = false
 	_steering_integral = 0.0
 	_heading_correction = 0.0
+	_line_capture_pending = false
+	_line_settle_time = 0.0
+	_line_from_player_turn = false
+	_line_ground_seen = false
+	_landing_line_pending = false
+	_landing_line_active = false
+	_landing_line_elapsed = 0.0
 	_bank_intent = 0.0
 	_slip_feedforward = 0.0
 	_front_support = 0.0
@@ -365,6 +383,12 @@ func set_riding_mode(mode: String) -> bool:
 	_bank_intent = 0.0
 	_slip_feedforward = 0.0
 	_automatic_body_forward = 0.0
+	_line_capture_pending = false
+	_line_settle_time = 0.0
+	_line_from_player_turn = false
+	_landing_line_pending = false
+	_landing_line_active = false
+	_landing_line_elapsed = 0.0
 	if _built:
 		_rider_heading = -chassis.global_basis.z
 		_rider_line_origin = chassis.global_position
@@ -464,10 +488,33 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		# Bars remain a real bearing with equal/opposite torques. With neither
 		# tire supported, the roll feedback is completely inactive.
 		var grounded := front_wheel.contact or rear_wheel.contact
+		if grounded and front_wheel.normal_load + rear_wheel.normal_load > 100.0:
+			_line_ground_seen = true
+		if not grounded and _line_ground_seen and _air_time >= float(riding.get("AirLinePerceptionTime", 0.2)):
+			# A sustained jump ends the old ground line reference. A brief bump
+			# does not erase the human's chosen line each time a patch unloads.
+			# In flight the rider has no balance/heading actuator. Capture a
+			# fresh actual travel line once loaded contact returns, then acquire
+			# it gradually through finite handlebars as the landing settles.
+			_line_capture_pending = true
+			_line_settle_time = 0.0
+			_line_from_player_turn = true
+			_landing_line_pending = true
+			_landing_line_active = false
+			_landing_line_elapsed = 0.0
+			# The old corrective bank is also a ground-line intent, not an
+			# airborne pose request. Do not revive it at first contact while the
+			# rider is catching an otherwise clean, upright landing.
+			_bank_intent = 0.0
+			_steering_integral = 0.0
 		var forward_speed := maxf(0.0, chassis.linear_velocity.dot(-chassis.global_basis.z))
 		var blend := smoothstep(0.6, 2.2, forward_speed) if grounded else 0.0
 		var contact_rate := 1.0 / maxf(float(riding.get("ContactPerceptionTime", 1.0 / 12.0)), 0.01)
-		var front_authority := smoothstep(50.0, 250.0, front_wheel.normal_load) if front_wheel.contact else 0.0
+		# Tire grip already falls with the actual normal load. A lightly loaded
+		# but supported front patch still needs the rider's finite bar strength
+		# to catch roll; blending toward straight-air grip at 100–250 N removes
+		# corrective steering precisely during a landing's suspension rebound.
+		var front_authority := smoothstep(0.0, float(riding.get("FrontContactConfidenceLoad", 80.0)), front_wheel.normal_load) if front_wheel.contact else 0.0
 		var rear_authority := smoothstep(60.0, 300.0, rear_wheel.normal_load) if rear_wheel.contact else 0.0
 		_front_support = move_toward(_front_support, front_authority, dt * contact_rate)
 		_rear_support = move_toward(_rear_support, rear_authority, dt * contact_rate)
@@ -496,9 +543,40 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		var forward := -chassis.global_basis.z
 		forward.y = 0.0
 		forward = forward.normalized()
+		if _landing_line_pending and grounded and front_wheel.normal_load + rear_wheel.normal_load > 100.0:
+			var landing_direction := chassis.linear_velocity
+			landing_direction.y = 0.0
+			_rider_heading = landing_direction.normalized() if landing_direction.length_squared() > 2.25 else forward
+			_rider_line_origin = chassis.global_position
+			_landing_line_pending = false
+			_landing_line_active = true
+			_landing_line_elapsed = 0.0
+			_line_capture_pending = false
+			_line_settle_time = 0.0
+		if _landing_line_active and grounded:
+			_landing_line_elapsed = minf(_landing_line_elapsed + dt, 2.0)
 		if absf(float(input.steer)) + absf(float(input.lean)) > 0.025:
+			_landing_line_pending = false
+			_landing_line_active = false
+			_landing_line_elapsed = 0.0
 			_rider_heading = forward
 			_rider_line_origin = chassis.global_position
+			_line_capture_pending = true
+			_line_settle_time = 0.0
+			_line_from_player_turn = true
+		elif _line_capture_pending:
+			# Let a released stick return the bike upright before capturing its
+			# next line. Capturing the still-turning tangent immediately asks the
+			# rider to undo the natural finishing arc with an opposite bank.
+			# This changes only a human intent/reference, never the body motion.
+			_rider_heading = forward
+			_rider_line_origin = chassis.global_position
+			if grounded and absf(lean) < deg_to_rad(2.0) and absf(lean_rate) < 0.12 and absf(_heading_rate()) < 0.06:
+				_line_settle_time += dt
+			else:
+				_line_settle_time = 0.0
+			if _line_settle_time >= float(riding.get("LineSettleTime", 0.35)):
+				_line_capture_pending = false
 		elif grounded and forward_speed > 1.5 and bool(riding.get("MaintainHeading", true)):
 			var reference := _rider_heading
 			reference.y = 0.0
@@ -511,8 +589,21 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			var lateral_error := (chassis.global_position - _rider_line_origin).dot(right)
 			heading_error -= atan(lateral_error / maxf(6.0, forward_speed * float(riding.get("LineLookaheadTime", 1.5))))
 			var yaw_rate := _heading_rate()
-			_heading_correction = clampf(atan(forward_speed * (heading_error * float(riding.get("HeadingFrequency", 3.0)) - yaw_rate * float(riding.get("HeadingDamping", 0.8))) / 9.81),
+			var heading_frequency := lerpf(float(riding.get("SeatedHeadingFrequency", 3.0)), float(riding.get("StandingHeadingFrequency", 3.0)), _standing)
+			if _line_from_player_turn:
+				# A freshly chosen turn exit has a less certain line than the
+				# straight launch reference. Follow it with a longer lookahead,
+				# below the rider's roll bandwidth, rather than trying to correct
+				# tire relaxation/side-slip with another immediate opposite turn.
+				heading_frequency = lerpf(float(riding.get("TurnExitHeadingFrequency", 1.2)), float(riding.get("StandingTurnExitHeadingFrequency", 0.65)), _standing)
+			_heading_correction = clampf(atan(forward_speed * (heading_error * heading_frequency - yaw_rate * float(riding.get("HeadingDamping", 0.8))) / 9.81),
 				-deg_to_rad(12.0), deg_to_rad(12.0))
+			if _landing_line_active:
+				# Hold the touchdown reference fixed. Waiting indefinitely for a
+				# perfectly quiet bank while moving the reference each tick lets a
+				# mild landing wobble gradually redefine an unintended corner.
+				var acquire_delay := float(riding.get("LandingLineDelay", 0.25))
+				_heading_correction *= smoothstep(acquire_delay, acquire_delay + float(riding.get("LandingLineResponse", 0.5)), _landing_line_elapsed)
 			requested_bank += _heading_correction
 		# Human intent changes continuously. A stick reversal, a surface seam,
 		# or a braking-speed change must not demand a one-frame 72-degree bank
@@ -546,9 +637,9 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		_slip_feedforward += (slip_compensation * slip_reliability - _slip_feedforward) * (1.0 - exp(-dt / float(riding.get("SlipResponse", 0.10))))
 		_steering_target = clampf(_steering_target + _slip_feedforward, -max_angle, max_angle)
 		# A front-only nose-heavy contact can rotate the caster through zero
-		# and reverse mechanical trail. The human braces the bars near centre
-		# until the rear tire supports steering again, instead of demanding a
-		# kinematic turn from a two-patch model on a one-patch landing.
+		# and reverse mechanical trail. Increase finite hand grip there, but
+		# keep roll-catching input: forcing bars back to centre removes tire
+		# leverage and can gyroscopically roll the bike deeper into the fall.
 		var brace := 0.0
 		if front_wheel.contact and not rear_wheel.contact:
 			var normal := front_wheel.contact_normal
@@ -560,7 +651,6 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 				patch_forward -= normal * patch_forward.dot(normal)
 				_mechanical_trail = (intersection - front_wheel.contact_position).dot(patch_forward.normalized())
 				brace = 1.0 - smoothstep(-0.025, 0.035, _mechanical_trail)
-				_steering_target = lerpf(_steering_target, 0.0, brace)
 		else:
 			_mechanical_trail = float(config.Steering.Trail)
 		if front_wheel.contact and blend > 0.1 and not bool(_front_result.get("sliding", false)):
@@ -582,7 +672,12 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		# perceived contact history cannot drive bicycle curvature through an
 		# unloaded wheel. Hand grip itself is retained at full finite strength.
 		var loaded_balance := front_authority * _front_support
-		var grip_angle := float(input.steer) * max_angle * 0.5
+		# In flight the player exchanges the spinning front wheel's angular
+		# momentum through actual bar travel, alongside independent torso twist.
+		# Partial bar travel keeps the coupled whip/reversal controllable; this
+		# is an input range, not a chassis attitude or angular-velocity limit.
+		var air_travel := float(riding.get("AirBarTravel", 0.5)) if not grounded else 0.5
+		var grip_angle := float(input.steer) * max_angle * air_travel
 		var grip_torque := clampf(-(grip_angle - angle) * float(riding.get("AirBarStiffness", 600.0)) - rate * float(riding.get("AirBarDamping", 25.0)),
 			-float(riding.get("MaxTorque", 45.0)), float(riding.get("MaxTorque", 45.0)))
 		scalar = lerpf(grip_torque, scalar, loaded_balance)
@@ -647,6 +742,12 @@ func _apply_tire(wheel: Wheel, state: Dictionary, radius: float, dt: float) -> D
 	var usable_contact := wheel.contact and forward.length_squared() > 0.000001
 	forward = forward.normalized()
 	var right := forward.cross(normal).normalized()
+	# The native rounded shoulder supplies the actual contact lever. The same
+	# lever must transport tread speed and produce tire torque; using nominal
+	# upright radius for one while applying force at another creates spurious
+	# longitudinal slip during a bank or a deeply compressed terrain contact.
+	var effective_radius := axle.cross(wheel.contact_position - wheel.global_position).dot(forward) if usable_contact else radius
+	usable_contact = usable_contact and effective_radius > 0.001
 	var non_spin_omega := wheel.angular_velocity - axle * wheel.angular_velocity.dot(axle)
 	var hub_velocity := wheel.linear_velocity + non_spin_omega.cross(
 		wheel.contact_position - wheel.global_position) - wheel.ground_velocity
@@ -655,7 +756,7 @@ func _apply_tire(wheel: Wheel, state: Dictionary, radius: float, dt: float) -> D
 	var input := {"normalLoad": wheel.normal_load, "contact": usable_contact,
 		"longitudinalVelocity": hub_velocity.dot(forward),
 		"lateralVelocity": hub_velocity.dot(right),
-		"wheelOmega": wheel.angular_velocity.dot(-axle), "radius": radius,
+		"wheelOmega": wheel.angular_velocity.dot(-axle), "radius": effective_radius,
 		"camber": asin(clampf(-axle.dot(normal), -1.0, 1.0))}
 	var surface: Dictionary = config.Surfaces.get(wheel.surface, config.Surfaces.dirt)
 	var tire_settings: Dictionary = config.Tire
@@ -665,6 +766,7 @@ func _apply_tire(wheel: Wheel, state: Dictionary, radius: float, dt: float) -> D
 		tire_settings = config.Tire.duplicate()
 		tire_settings.CamberStiffness = float(config.Tire.RearCamberStiffness)
 	var result: Dictionary = Tire.step(state, input, dt, tire_settings, surface)
+	result.effectiveRadius = effective_radius
 	if usable_contact and wheel.normal_load > 0.0:
 		var force := forward * float(result.longitudinalForce) + right * float(result.lateralForce)
 		wheel.record_tire_loading(force)
@@ -722,14 +824,24 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 	var roll_motion := _advance_rider_axis(_body_lean, float(input.lean),
 		_rider_roll_rate, float(rider.MaxRoll), float(rider.MoveRate),
 		float(rider.RollInertia), float(rider.MaxReactionTorque), dt)
+	# In unsupported flight the player can twist the bike beneath the torso
+	# through their legs as well as move sideways. This is a bounded HUMAN
+	# body-relative pose, sensed by the existing finite paired posture servo.
+	# It applies no external yaw force and has no world/landing angle target.
+	var twist_request := float(input.bodySide) if not front_wheel.contact and not rear_wheel.contact else 0.0
+	var yaw_motion := _advance_rider_axis(_body_twist, twist_request,
+		_rider_yaw_rate, float(rider.get("MaxYaw", deg_to_rad(30.0))), float(rider.MoveRate),
+		float(rider.get("YawInertia", rider.RollInertia)), float(rider.MaxReactionTorque), dt)
 	_body_forward = pitch_motion.x
 	_body_lean = roll_motion.x
+	_body_twist = yaw_motion.x
 	_body_side = move_toward(_body_side, float(input.bodySide), step_size)
 	_standing = move_toward(_standing, 1.0 if input.standing else 0.0, step_size)
 	# These rates describe a bounded body-relative muscle target. The native
 	# rider mass supplies the actual inertial reaction through paired support.
 	_rider_pitch_rate = pitch_motion.y
 	_rider_roll_rate = roll_motion.y
+	_rider_yaw_rate = yaw_motion.y
 	if _velocity_sample_valid:
 		var acceleration := (chassis.linear_velocity - _last_velocity_sample).dot(-chassis.global_basis.z) / maxf(dt, 0.0001)
 		_forward_acceleration += (clampf(acceleration, -10.0, 10.0) - _forward_acceleration) * (1.0 - exp(-dt / 0.12))
@@ -745,7 +857,7 @@ func _apply_rider_pose(pose_reset: bool = false) -> void:
 		0.09 - _body_forward * float(rider.ForeAftTravel))
 	# The frame inertia/COM are constant. A fifth physical body carries the
 	# mass, so internal movement exchanges momentum through real paired forces.
-	var rider_rotation := Vector3(-_body_forward * float(rider.MaxPitch), 0,
+	var rider_rotation := Vector3(-_body_forward * float(rider.MaxPitch), _body_twist * float(rider.get("MaxYaw", deg_to_rad(30.0))),
 		-_body_lean * float(rider.MaxRoll))
 	_rider_reference_transform = Transform3D(Basis.from_euler(rider_rotation), rider_position)
 	if not pose_reset:
@@ -756,6 +868,7 @@ func _apply_rider_pose(pose_reset: bool = false) -> void:
 		bool(controls.footDown) and not crashed, {"suspension_compression": clampf(suspension_compression, 0.0, 1.0),
 		"forward_acceleration": _forward_acceleration, "speed": chassis.linear_velocity.length(),
 		"grounded": front_wheel.contact or rear_wheel.contact, "dt": get_physics_process_delta_time(), "pose_reset": pose_reset,
+		"rider_yaw_target": _body_twist * float(rider.get("MaxYaw", deg_to_rad(30.0))),
 		"rider_transform": chassis.global_transform.affine_inverse() * rider_body.global_transform,
 		"rider_reference_transform": _rider_reference_transform})
 
@@ -901,9 +1014,11 @@ func get_telemetry() -> Dictionary:
 		"ridingMode": riding_mode, "riderSteeringTorque": _rider_steering_torque,
 		"riderTargetLean": _rider_target_lean, "steeringTarget": _steering_target,
 		"headingCorrection": _heading_correction,
+		"lineCapturePending": _line_capture_pending,
 		"frontSupport": _front_support, "rearSupport": _rear_support,
 		"slipFeedforward": _slip_feedforward, "tireLossContext": _tire_loss_context,
 		"automaticBodyForward": _automatic_body_forward, "mechanicalTrail": _mechanical_trail,
+		"riderTwist": _body_twist * float(config.Rider.get("MaxYaw", deg_to_rad(30.0))),
 		"riderTransform": chassis.global_transform.affine_inverse() * rider_body.global_transform,
 		"riderReferenceTransform": _rider_reference_transform,
 		"riderSupportForce": _rider_force, "riderPostureTorque": _rider_torque,
@@ -979,14 +1094,19 @@ func _apply_rider_support(target: Vector3) -> void:
 	_rider_force = chassis.global_basis * local_force
 	rider_body.apply_central_force(_rider_force)
 	chassis.apply_force(-_rider_force, rider_body.global_position - chassis.global_position)
-	var requested := Basis.from_euler(Vector3(-_body_forward * float(config.Rider.MaxPitch), 0, -_body_lean * float(config.Rider.MaxRoll)))
+	var requested := _rider_reference_transform.basis
 	var relative := chassis.global_basis.inverse() * rider_body.global_basis
 	var error_rotation := (requested * relative.inverse()).get_rotation_quaternion()
 	var angle := error_rotation.get_angle()
 	if angle > PI:
 		angle -= TAU
 	var local_omega := chassis.global_basis.inverse() * (rider_body.angular_velocity - chassis.angular_velocity)
-	var torque_local := error_rotation.get_axis() * angle * float(tune.get("PostureStiffness", 180)) - local_omega * float(tune.get("PostureDamping", 12))
+	var posture_stiffness := Vector3(float(tune.get("PostureStiffness", 180)), float(tune.get("YawPostureStiffness", 100)), float(tune.get("PostureStiffness", 180)))
+	var posture_damping := Vector3(float(tune.get("PostureDamping", 12)), float(tune.get("YawPostureDamping", 25)), float(tune.get("PostureDamping", 12)))
+	# Hip twist is a softer, more damped muscle mode than pitch/roll. A scalar
+	# underdamped torso servo makes a new yaw degree of freedom ring against
+	# spinning wheel gyroscopes, especially when the player reverses a whip.
+	var torque_local := error_rotation.get_axis() * angle * posture_stiffness - local_omega * posture_damping
 	_rider_torque = chassis.global_basis * torque_local.limit_length(float(config.Rider.MaxReactionTorque))
 	rider_body.apply_torque(_rider_torque)
 	chassis.apply_torque(-_rider_torque)

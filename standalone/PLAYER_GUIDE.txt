@@ -1,4 +1,4 @@
-DIRTLINE MX / WINDOWS PC / 0.3.0
+DIRTLINE MX / WINDOWS PC / 0.4.0
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
@@ -45,9 +45,14 @@ Bindings and camera preferences are saved on this computer.
 RIDING MODES AND CAMERA
 Default lean control asks the virtual rider to countersteer physically through
 the handlebars. It does not lock the bike upright or correct its landing.
-Version 0.3 smooths lean reversals, handles brief wheel-contact loss, and
-uses softer effective wheel-rate suspension. Your virtual rider braces over
-bumps; manual body input sets the posture, with full input taking priority.
+Version 0.4 finishes your turn when you release the stick before choosing a
+new straight line. It clears stale steering intent after a sustained jump.
+The rider braces over bumps; full manual body input takes priority.
+In the air, left stick moves the bars and right stick sideways twists your
+hips as well as shifting your body. Counter-input brings a whip back.
+These inputs move the physical rider/bike; they are not a canned animation.
+The chase camera ignores your own rider and bike, so body-stick movement
+cannot pull it into the motorcycle. Right mouse remains the look control.
 Manual handlebar mode is available in Settings for direct steering effort.
 If an older build saved manual mode, select Virtual rider in Settings to use
 the updated lean-control handling. Your existing bindings remain saved.
@@ -63,9 +68,13 @@ The rider leans forward with elbows up and knees toward the bike. Standing
 flexes over suspension movement; manual body controls still affect real COM.
 
 THE PROVING GROUND
-The larger course has 40 m of flat launch before bumps and a separate 100 m
-practice straight on the west side. Practice on flat ground, then try stations:
-braking bumps, whoops, banked berms, ruts, tabletop, large jump and grip pads.
+The circuit is now about 873 m long with 14 ordered gates. The original 40 m
+flat launch, 100 m practice straight, bumps, whoops, berms and grip pads remain.
+Follow the extended east straight for the 3.2 m progression tabletop, then
+the 4.5 m big tabletop with a 42 m landing. The jump section is 15 m wide
+with graded shoulders; the west return adds broad rollers.
+Straighten before takeoff, use body/bar inputs in the air, and land in line
+with the downhill surface. Practice the smaller jump before the larger one.
 Pass track gates in order to time a local lap. Recovery cancels that lap.
 U opens spring, compression/rebound damping and preload settings while parked.
 

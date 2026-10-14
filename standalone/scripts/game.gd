@@ -454,7 +454,11 @@ func camera_target_transform() -> Transform3D:
 	var wanted: Vector3 = target + Vector3(sin(yaw) * orbit_distance, orbit_height, cos(yaw) * orbit_distance)
 	# Pull the chase camera forward when terrain would otherwise hide the rider.
 	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(target, wanted)
-	query.exclude = [body.get_rid(), bike.front_wheel.get_rid(), bike.rear_wheel.get_rid()]
+	# The rider and fork are separate physical bodies. Body movement must not
+	# make our own motorcycle obstruct its camera, especially near the torso.
+	query.collision_mask = body.collision_mask
+	query.exclude = [body.get_rid(), bike.fork.get_rid(), bike.front_wheel.get_rid(),
+		bike.rear_wheel.get_rid(), bike.rider_body.get_rid()]
 	var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
 	if not hit.is_empty():
 		wanted = hit.position + hit.normal * 0.22
@@ -568,7 +572,7 @@ func _build_hud() -> void:
 	var race_box: VBoxContainer = VBoxContainer.new()
 	race_box.add_theme_constant_override("separation", 7)
 	race_panel.add_child(race_box)
-	race_box.add_child(_label("SINGLEPLAYER · TEST TRACK", 13, TEAL))
+	race_box.add_child(_label("SINGLEPLAYER · %d m CIRCUIT" % roundi(float(track.get("course_length_m", 0.0))), 13, TEAL))
 	labels.lap = _label("Cross START to begin", 18)
 	race_box.add_child(labels.lap)
 	labels.timer = _label("0:00.000", 29)
@@ -703,8 +707,8 @@ func _show_modal(kind: String) -> void:
 
 func _welcome_content(content: VBoxContainer) -> void:
 	content.add_child(_label("LEARN THE RIDE.", 36))
-	content.add_child(_label("250F · Motocross test track", 19, ORANGE))
-	var detail: Label = _label("One full-size 250F. A bigger motocross proving ground.\nControl your lean, move your body and learn each jump.\nManual clutch and separate brakes.", 16, MUTED)
+	content.add_child(_label("250F · v%s · Motocross circuit" % str(ProjectSettings.get_setting("application/config/version", "")), 19, ORANGE))
+	var detail: Label = _label("%d m circuit with 3.2 m and 4.5 m tabletops.\nControl your lean, move your body and learn each jump.\nManual clutch and separate brakes." % roundi(float(track.get("course_length_m", 0.0))), 16, MUTED)
 	content.add_child(detail)
 	content.add_child(_label("Keyboard + controller · Windows PC", 15, TEAL))
 	content.add_child(_button("LET’S RIDE", start_session, true))
@@ -757,13 +761,13 @@ func _help_content(content: VBoxContainer) -> void:
 	tabs.add_child(controller)
 	controller.add_child(_label("RT  Throttle     LT  Front brake     RB  Rear brake", 15))
 	controller.add_child(_label("LB  Pull clutch; release LB to engage over 0.6 seconds", 15))
-	controller.add_child(_label("Left stick  Lean command / direct bars     Right stick  Rider body position", 15))
+	controller.add_child(_label("Left stick  Lean / airborne bars     Right stick  Rider body position", 15))
 	controller.add_child(_label("D-pad ← / →  Rider lean     D-pad ↓ / ↑  Shift down / up", 15))
 	controller.add_child(_label("A  Seated / standing     X  Feet down / on pegs     Y  Recover", 15))
 	controller.add_child(_label("Left-stick click  Engine start     Right-stick click  Help", 15))
 	controller.add_child(_label("B / Circle  Camera mode     Menu / Start  Pause", 15))
 	controller.add_child(_label("Customize every controller action in Settings → Controller bindings.\nKeyboard controls remain available. Only your selected controller drives.", 14, TEAL))
-	content.add_child(_label("Ride numbered gates in order to time a lap. Recovery cancels the lap.\nTest berms, ruts, braking bumps, whoops and the separate large-jump lane.", 14, MUTED))
+	content.add_child(_label("Ride numbered gates in order to time the %d m lap. Recovery cancels it.\nFollow the east straight for the 3.2 m and 4.5 m tabletops.\nIn the air, steer and move your body; countersteer to bring a whip back." % roundi(float(track.get("course_length_m", 0.0))), 14, MUTED))
 	content.add_child(_button("Back to ride" if session_started else "Back", _resume if session_started else func() -> void: _show_modal("welcome"), true))
 
 func _settings_content(content: VBoxContainer) -> void:

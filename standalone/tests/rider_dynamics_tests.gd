@@ -167,7 +167,12 @@ func _coupled_case(hz: int, active: bool) -> Dictionary:
 		var local_rate: Vector3 = bike.chassis.global_basis.inverse() * (bike.rider_body.linear_velocity - frame_velocity)
 		var damping := Vector3(float(cfg.RiderSupport.SideDamping), float(cfg.RiderSupport.VerticalDamping), float(cfg.RiderSupport.ForeDamping))
 		var relative_omega: Vector3 = bike.rider_body.angular_velocity - bike.chassis.angular_velocity
-		damping_work -= (local_rate.dot(damping * local_rate) + float(cfg.RiderSupport.PostureDamping) * relative_omega.length_squared()) * dt
+		var local_relative_omega: Vector3 = bike.chassis.global_basis.inverse() * relative_omega
+		var posture_damping := Vector3(float(cfg.RiderSupport.PostureDamping),
+			float(cfg.RiderSupport.get("YawPostureDamping", 25.0)), float(cfg.RiderSupport.PostureDamping))
+		# Yaw is a separately tuned torso mode. Resolve angular speed in the
+		# bike frame so this diagnostic accounts for the actual damping law.
+		damping_work -= (local_rate.dot(damping * local_rate) + local_relative_omega.dot(posture_damping * local_relative_omega)) * dt
 		bike._apply_suspension(bike.front_wheel, bike.fork, Bike.FRONT_AXLE - Bike.HEAD, true, dt)
 		bike._apply_suspension(bike.rear_wheel, bike.chassis, Bike.REAR_AXLE, false, dt)
 		var wrenches := _applied_wrenches()

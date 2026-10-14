@@ -80,7 +80,9 @@
     "PitchInertia": 5.2,
     "RollInertia": 3.2,
     "SideTravel": 0.18,
-    "StandingHeight": 0.22
+    "StandingHeight": 0.22,
+    "MaxYaw": 0.5235987755982988,
+    "YawInertia": 3.2
   },
   "RiderMass": 78,
   "Steering": {
@@ -171,7 +173,18 @@
     "HighSpeedBarDamping": 18.0,
     "ContactPerceptionTime": 0.1,
     "SeatedRollFrequency": 6.4,
-    "AccelerationBodyBrace": 0.65
+    "AccelerationBodyBrace": 0.65,
+    "SeatedHeadingFrequency": 3.0,
+    "StandingHeadingFrequency": 3.0,
+    "HeadingDamping": 0.8,
+    "AirBarTravel": 0.5,
+    "TurnExitHeadingFrequency": 1.2,
+    "StandingTurnExitHeadingFrequency": 0.65,
+    "LineSettleTime": 0.35,
+    "AirLinePerceptionTime": 0.2,
+    "LandingLineDelay": 0.25,
+    "LandingLineResponse": 0.5,
+    "FrontContactConfidenceLoad": 80.0
   },
   "Version": 3,
   "Wheelbase": 1.48,
@@ -192,6 +205,8 @@
     "ForeDamping": 200,
     "MaxForce": 3500,
     "PostureStiffness": 180,
-    "PostureDamping": 12
+    "PostureDamping": 12,
+    "YawPostureStiffness": 100.0,
+    "YawPostureDamping": 25.0
   }
 }

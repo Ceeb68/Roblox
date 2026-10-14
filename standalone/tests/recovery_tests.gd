@@ -124,10 +124,15 @@ func _assert_reset(label: String, just_integrated: bool = false) -> void:
 		label + " immediately restores the seated visible rider")
 	_check(absf(float(game.bike._body_forward)) + absf(float(game.bike._body_side))
 		+ absf(float(game.bike._body_lean)) + absf(float(game.bike._standing))
+		+ absf(float(game.bike._body_twist)) + absf(float(game.bike._rider_yaw_rate))
 		+ absf(float(game.bike._rider_pitch_rate)) + absf(float(game.bike._rider_roll_rate)) < 0.0001,
 		label + " removes old posture and articulation momentum")
 	_check(absf(float(game.bike._rider_target_lean)) + absf(float(game.bike._steering_target))
-		+ absf(float(game.bike._heading_correction)) + absf(float(game.bike._steering_integral)) < 0.0001,
+		+ absf(float(game.bike._heading_correction)) + absf(float(game.bike._steering_integral)) < 0.0001
+		and not game.bike._line_capture_pending and not game.bike._line_from_player_turn
+		and absf(float(game.bike._line_settle_time)) < 0.0001
+		and not game.bike._landing_line_pending and not game.bike._landing_line_active
+		and absf(float(game.bike._landing_line_elapsed)) < 0.0001,
 		label + " removes old cornering and steering state")
 	_check(not game.lap_active and game.next_gate == 0,
 		label + " clears the interrupted lap and checkpoint progress")

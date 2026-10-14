@@ -279,6 +279,15 @@ func _physical_rider_motion(riding_state: Dictionary) -> Variant:
 			or absf(reference.basis.determinant()) < 0.00001):
 		return null
 	var motion: Transform3D = actual * reference.affine_inverse()
+	# Input pitch/roll already shape the anatomical base pose. Hip twist is a
+	# new physical yaw channel: put its reference rotation into that base once,
+	# around the rider COM, before adding the actual body's deviation. This
+	# shows actual torso yaw rather than cancelling it or animating ahead of it.
+	var yaw_target := float(riding_state.get("rider_yaw_target", 0.0))
+	if not is_finite(yaw_target):
+		yaw_target = 0.0
+	var yaw_basis := Basis(Vector3.UP, clampf(yaw_target, -PI * 0.5, PI * 0.5))
+	motion = motion * Transform3D(yaw_basis, reference.origin - yaw_basis * reference.origin)
 	if not motion.origin.is_finite() or not motion.basis.is_finite():
 		return null
 	motion.basis = motion.basis.orthonormalized()
