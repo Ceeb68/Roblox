@@ -63,6 +63,9 @@ func _new_bike(position_value: Vector3 = Vector3(0.0, 0.82, 0.0), basis_value: B
 	bike = bike_script.new()
 	bike.name = "NativeTestBike"
 	bike.configure(cfg.duplicate(true))
+	# These are isolated mechanical benches. Turn off the selectable virtual
+	# rider so a steering feedback loop cannot mask the dynamics under test.
+	bike.set_riding_mode("direct")
 	world.add_child(bike)
 	bike.reset_bike(Transform3D(basis_value, position_value))
 	bike.set_controls({"clutch": 1.0, "footDown": true})
@@ -86,7 +89,9 @@ func _native_joints(node: Node) -> Array[Joint3D]:
 
 func _wheel_has_native_volume(wheel: RigidBody3D, minimum_radius: float) -> bool:
 	for child: Node in wheel.get_children():
-		if child is CollisionShape3D and not child.disabled and child.shape is CylinderShape3D:
+		if not child is CollisionShape3D or child.disabled:
+			continue
+		if child.shape is CylinderShape3D:
 			return child.shape.radius >= minimum_radius and child.shape.height > 0.05
 	return false
 
@@ -134,8 +139,8 @@ func _test_structure_and_settle() -> void:
 	_check(bodies.size() == 4, "Four native chassis/fork/wheel bodies", str(bodies.size()))
 	_check(absf(total_mass - 187.0) < 0.01, "Physical bike+rider mass is 187 kg", str(total_mass))
 	_check(_native_joints(bike).size() >= 3, "Native constraints connect all four bodies")
-	_check(_wheel_has_native_volume(bike.front_wheel, 0.34), "Front tire has a native cylinder volume")
-	_check(_wheel_has_native_volume(bike.rear_wheel, 0.33), "Rear tire has a native cylinder volume")
+	_check(_wheel_has_native_volume(bike.front_wheel, 0.34), "Front tire has a full native collision volume")
+	_check(_wheel_has_native_volume(bike.rear_wheel, 0.33), "Rear tire has a full native collision volume")
 	await _advance(3.0)
 	var telemetry: Dictionary = bike.get_telemetry()
 	_check(bool(telemetry.frontContact) and bool(telemetry.rearContact), "Both tires physically contact a flat floor", str(telemetry))
@@ -321,7 +326,7 @@ func _test_native_wheelspin() -> void:
 			var tread_speed: float = -_omega(bike.rear_wheel) * float(cfg.RearRadius)
 			var hub_speed: float = bike.rear_wheel.linear_velocity.dot(-bike.chassis.global_basis.z)
 			maximum_tread_difference = maxf(maximum_tread_difference, tread_speed - hub_speed)
-	_check(supported_ticks > 30, "Wheelspin test keeps the actual rear cylinder under load")
+	_check(supported_ticks > 30, "Wheelspin test keeps the actual rear tire volume under load")
 	_check(maximum_slip > 0.15 and maximum_tread_difference > 0.75, "Mud traction allows actual native rear wheelspin", "slip=%.3f tread-hub=%.3f m/s" % [maximum_slip, maximum_tread_difference])
 	print("NATIVE mud wheelspin: slip=%.3f, native tread-hub difference=%.3f m/s" % [maximum_slip, maximum_tread_difference])
 	floor_body.set_meta("physics_surface", "hardpack")
@@ -337,7 +342,7 @@ func _test_balance_crash_and_vertical_contact() -> void:
 	var remaining: float = fallen.recoveryRemaining
 	await _advance(0.5)
 	_check(float(bike.get_telemetry().recoveryRemaining) < remaining, "Crash recovery delay advances in simulation time")
-	# Unlike a ray-from-axle model, a sideways native cylinder still collides.
+	# Unlike a ray-from-axle model, a sideways native wheel volume still collides.
 	# Place the rear wheel just above the floor; the chassis may land alongside
 	# it, but wheel volume/contact remains an independently observable fact.
 	var rear_first_pose := Basis(Vector3.RIGHT, deg_to_rad(25.0)) * Basis(Vector3.FORWARD, deg_to_rad(87.0))
@@ -352,7 +357,7 @@ func _test_balance_crash_and_vertical_contact() -> void:
 			observed_native_contact = true
 			observed_model_contact = observed_model_contact or bool(bike.get_telemetry().rearContact)
 			smallest_up_dot = minf(smallest_up_dot, absf(bike.chassis.global_basis.y.dot(Vector3.UP)))
-	_check(observed_native_contact, "Near-horizontal axle uses native rear-cylinder collision")
+	_check(observed_native_contact, "Near-horizontal axle uses native rear-wheel volume collision")
 	_check(observed_model_contact and smallest_up_dot < 0.2, "Contact model retains native rear contact at near-vertical lean", "up dot=%.3f" % smallest_up_dot)
 	_check(_finite_vector(bike.chassis.global_position) and bike.chassis.global_position.y > -0.3, "Sideways native collision prevents falling through floor")
 	print("NATIVE balance/contact: fall roll=%.3f rad, crash=%s, sideways contact up-dot=%.3f" % [fallen.roll, fallen.crashReason, smallest_up_dot])

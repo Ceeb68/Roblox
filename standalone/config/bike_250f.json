@@ -151,7 +151,17 @@
     "RelaxationLength": 0.25,
     "RollingResistance": 0.015
   },
-  "Version": 1,
+  "VirtualRider": {
+    "LowFrequency": 3.0,
+    "RollFrequency": 3.4,
+    "RollDamping": 1.2,
+    "BarStiffness": 600.0,
+    "BarDamping": 18.0,
+    "BarIntegral": 300.0,
+    "MaxTorque": 45.0,
+    "MaintainHeading": true
+  },
+  "Version": 2,
   "Wheelbase": 1.48,
   "PhysicsHz": 240,
   "Unsprung": {

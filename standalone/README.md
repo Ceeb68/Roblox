@@ -4,7 +4,7 @@ Windows PC is the first player target. Godot 4.6.3 with Jolt Physics replaces th
 
 ## Scope and controls
 
-One fictional DL-MX 250F four-stroke, a handling laboratory, local session laps, suspension setup, PC/controller controls, procedural scenery and original synthesized engine audio. It is an early development build. No manufacturer branding, commercial motorcycle data or commercial simulator assets are included.
+One fictional DL-MX 250F four-stroke, a larger handling laboratory, local session laps, suspension setup, PC/controller controls, procedural scenery and original synthesized engine audio. Version 0.2 adds default virtual-rider lean control, a first-person helmet camera, saved controller rebinding and detailed rider/bike presentation. It is an early development build. No manufacturer branding, commercial motorcycle data or commercial simulator assets are included.
 
 The bike starts in neutral, clutch pulled, feet down. Select first with **E**, build revs with **W**, meter clutch release with **B**, and lift feet with **F** as you move. **V** pulls the lever; **Shift** pulls it quickly. The keyboard lever holds its position when you release V/B. Dumping the clutch can stall the engine; **T** starts it when neutral or the clutch is pulled.
 
@@ -14,8 +14,8 @@ The bike starts in neutral, clutch pulled, feet down. Select first with **E**, b
 | Front / rear brake | Space / S | LT / RB |
 | Clutch | V pull, B release, Shift quick pull | LB pull, progressive release |
 | Shift down / up | Q / E | D-pad down / up |
-| Handlebar steering | A / D | Left stick X |
-| Lean articulation | Z / X | D-pad left / right |
+| Bike lean command; bars in manual mode | A / D | Left stick X |
+| Rider lean articulation | Z / X | D-pad left / right |
 | Rider forward / back | I / K | Right stick Y |
 | Rider side | J / L | Right stick X |
 | Standing / seated | C | A |
@@ -25,8 +25,15 @@ The bike starts in neutral, clutch pulled, feet down. Select first with **E**, b
 | Help | H | Right stick click |
 | Suspension setup | U | Menu button in HUD |
 | Pause | Escape | Start |
+| Chase / first-person camera | M | B / Circle |
 
 Feet are manually deployed physical colliders; leaving them down can contact and drag on the terrain. Recovery is manual after a 2.5-second crash delay. It resets the bike to the lab spawn and invalidates the current lap. Session lap timing requires ordered gates; this build does not save records or provide online races.
+
+Default **Lean control · virtual rider** uses your primary input as a desired lean. A finite human model countersteers and steers into a developing fall through the physical fork bearing; it can follow a neutral line without assigning chassis roll, yaw or position. Steering authority, available traction and suspension still limit the outcome. **Direct handlebar control · manual** remains selectable in Settings. Real upper-body movement remains separate and influences COM, reaction and the rider's visible pose. Slides can recover before the actual bike departs; traction loss alone no longer immediately shuts down the rider.
+
+Press **M / controller B** for helmet view. The camera follows the physical rider's head, hides nearby head/torso meshes, retains real arms/bars/fender, and smooths only camera motion. Chase distance and both fields of view are adjustable. Close chase framing and full human gear proportions increase screen presence while retaining real motorcycle dimensions and masses.
+
+In **Escape / Start → Settings + controller binds → Controller bindings**, click an action's binding and press a button or move an axis fully in the desired direction. Every riding/menu/camera action is remappable. Directional half axes support independent assignment, coherent axis inversion and conflict replacement; deadzones, clear/reset and selected-device routing are included. Bindings persist in `user://controller_bindings.cfg`; camera/riding/display preferences persist separately. Disconnecting a controller releases controls. Hardware controller polling still needs a real controller playtest.
 
 ## Physics architecture
 
@@ -35,12 +42,16 @@ Feet are manually deployed physical colliders; leaving them down can contact and
 - `physics/tire.gd`: independent axle slip relaxation, load sensitivity, camber thrust, combined longitudinal/lateral force limit and surface-dependent rolling resistance.
 - `physics/suspension.gd`: spring/preload, independent compression/rebound damping, progressive bottom stop and signed force for airborne articulation.
 - `physics/gyroscope.gd`: implicit midpoint Euler dynamics using actual native principal inertia; supplies the gyroscopic precession missing from this engine configuration.
-- `scripts/wheel_body.gd`: actual native cylinder-wheel contact positions, normals, impulses, ground velocity and surface tags.
+- `scripts/wheel_body.gd`: native rounded-cylinder contact geometry, ground velocity, surface tags and contact-load estimates.
 - `scripts/bike_controller.gd`: four native rigid bodies (chassis/rider, steering fork, two wheels), caster steering hinge, two suspension sliders with free axle spin, paired suspension and drivetrain forces, rider COM/inertia approximation and physical crash observation.
 - `scripts/track_builder.gd`: continuous triangle-collision track with berms, ruts, bumps, whoops, tabletop, large jump and grip pads.
 - `scripts/rider_input.gd`, `game.gd`: manual controls, original procedural presentation, camera, telemetry, menus, setup and ordered local laps.
+- `scripts/controller_bindings.gd`: persisted, device-specific button/axis routing and conflict handling.
+- `scripts/rider_visual.gd`, `bike_visual.gd`: original full-face MX helmet/goggles, jersey/protection/boots, jointed limbs anchored to real grips/pegs, detailed plastics/engine/frame, spokes and knobbies.
 
-Native contacts provide normal support and collision response; the custom tire model provides tangential traction once. Tire collision materials have zero native friction. Motor/brake impulses are paired with chassis/fork reactions and use rotation relative to the bearing; native wheel angular momentum is not counted twice. The gyroscope integration follows physical Euler equations using each body's principal inertia. No world-upright, yaw-direction, steering-angle or landing-orientation target drives the bike. Steering input is bearing torque; real geometry and contact forces determine the response. Camera smoothing acts only on the camera.
+Native contacts provide normal support and collision response; the custom tire model provides tangential traction once. Tire collision materials have zero native friction. Rounded cylinder shoulders use Jolt's convex margin with collision-margin fraction 0.9, preserving smooth rolling and outer dimensions. Tire patch velocity includes non-spin angular transport, avoiding false lateral slip during roll. Motor/brake impulses are paired with chassis/fork reactions and use bearing-relative rotation; wheel angular momentum is not counted twice. Gyroscope integration follows physical Euler equations using actual principal inertia. Virtual-rider steering targets drive only a bounded bearing torque; there is no direct upright, heading, position or landing-orientation constraint on the chassis. Fully manual mode bypasses virtual-rider feedback.
+
+Godot 4.6.3 Jolt's `get_contact_impulse()` exposes a five-iteration estimated collision response rather than its final joint-coupled solved impulse. Tire normal loads therefore remain approximations; actual volume contacts and native normal support are preserved. This backend limitation is documented rather than described as measured final tire force.
 
 The project requests 240 physics steps per second and raises Jolt's angular-velocity safety limit to 250 rad/s so ordinary wheel speeds are not clipped. The worker pool is capped at two threads for this small prototype; this resolved a Jolt job-capacity warning seen with the default pool in the cloud tests. This is a CPU/performance target, not a promise of deterministic physics, frame-rate independence under overload, or competitive networking. Headless validation uses `--fixed-fps 240` to observe each native tick consistently.
 

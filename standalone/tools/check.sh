@@ -14,4 +14,7 @@ run_check --headless --editor --import --quit
 run_check --headless --script res://tests/math_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/gyro_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/native_scenarios.gd
+run_check --headless --fixed-fps 240 --script res://tests/handling_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/input_camera_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/playability_tests.gd
 run_check --headless --fixed-fps 240 --quit-after 480

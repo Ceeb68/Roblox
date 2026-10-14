@@ -1,11 +1,11 @@
-DIRTLINE MX / WINDOWS PC / 0.1.0
+DIRTLINE MX / WINDOWS PC / 0.2.0
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
 No Roblox account, Roblox Studio or Godot editor is needed to play.
 
 STARTING THE BIKE
-Click LET'S RIDE.
+Click LET'S RIDE. Lean control with a virtual rider is the default.
 The engine starts in neutral, with the clutch pulled and feet down.
 Press E for first gear.
 Hold W to build revs, then hold B to release the clutch gradually.
@@ -17,23 +17,43 @@ W = progressive throttle
 Space = front brake; S = rear brake
 V = pull clutch; B = meter release; Shift = quick pull
 Q / E = shift down / up
-A / D = handlebar steering; Z / X = lean
+A / D = requested bike lean in default mode; Z / X = upper-body lean
+In manual handlebar mode A / D applies steering effort directly.
 I / K = rider forward / back; J / L = rider left / right
 C = standing / seated; F = feet down / up
 R = manual recovery (after crash cooldown); T = engine starter
 H = controls; U = parked suspension setup; Escape = pause
+M = switch between chase view and first-person helmet view
 Hold right mouse = orbit camera; mouse wheel = camera distance
 
 CONTROLLER (XBOX-STYLE)
 RT = throttle; LT = front brake; RB = rear brake
 LB = pull clutch, release it progressively to engage
-Left stick = steering; right stick = rider positioning
-D-pad left / right = lean; down / up = gears
+Left stick = requested bike lean; right stick = rider positioning
+D-pad left / right = upper-body lean; down / up = gears
 A = standing / seated; X = feet; Y = recovery
+B / Circle = switch between chase view and helmet view
 Left stick click = starter; right stick click = help; Start = pause
 
+CUSTOM CONTROLLER BINDINGS
+Open Escape / Start -> Settings + controller binds -> Controller bindings.
+Click a binding, then press a button or fully move an axis in one direction.
+You can remap every action, change deadzones, invert axes, clear bindings or
+restore defaults. Confirm replacement if the input is already assigned.
+Bindings and camera preferences are saved on this computer.
+
+RIDING MODES AND CAMERA
+Default lean control asks the virtual rider to countersteer physically through
+the handlebars. It does not lock the bike upright or correct its landing.
+Manual handlebar mode is available in Settings for direct steering effort.
+Use your feet at a stop and raise them once moving. Slides remain recoverable
+until the actual bike loses balance; excess speed, lean and bad landings crash.
+Press M / controller B for helmet view; adjust field of view in Settings.
+Chase view is closer, and the geared rider/bike have a larger screen presence.
+
 THE PROVING GROUND
-Practice on flat ground, then try the numbered lab stations:
+The larger course has 40 m of flat launch before bumps and a separate 100 m
+practice straight on the west side. Practice on flat ground, then try stations:
 braking bumps, whoops, banked berms, ruts, tabletop, large jump and grip pads.
 Pass track gates in order to time a local lap. Recovery cancels that lap.
 U opens spring, compression/rebound damping and preload settings while parked.

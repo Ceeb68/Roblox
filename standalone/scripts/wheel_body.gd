@@ -5,7 +5,9 @@ const Gyro = preload("res://physics/gyroscope.gd")
 
 ## Native wheel contact reporting. Despite the historical name, Godot's
 ## get_contact_local_position() returns WORLD coordinates (4.6 API).
-## These contact normals/impulses also come from the native world solver.
+## Geometry comes from native world contacts. Godot4.6 Jolt reports an
+## estimated five-iteration collision response impulse, not its final joint-
+## coupled solver impulse, so normal_load is a contact-load approximation.
 ## There is no raycast support, fictitious normal load or wheel-height cutoff.
 var contact: bool = false
 var normal_load: float = 0.0

@@ -1,13 +1,15 @@
 extends Node3D
 class_name DLSimBike
 
-## A native SI-unit, four-body motorcycle. Every contact and suspension end
-## stop is resolved by Godot/Jolt. This is a prototype with explicit engineering
+## A native SI-unit, four-body motorcycle. Contact geometry and suspension
+## end stops are resolved by Godot/Jolt; tire normal loads use Jolt estimates. This is a prototype with explicit engineering
 ## coefficients, not a replication of any commercial motorcycle simulator.
 const Drive = preload("res://physics/drivetrain.gd")
 const Tire = preload("res://physics/tire.gd")
 const Suspension = preload("res://physics/suspension.gd")
 const Wheel = preload("res://scripts/wheel_body.gd")
+const RiderVisual = preload("res://scripts/rider_visual.gd")
+const BikeVisual = preload("res://scripts/bike_visual.gd")
 
 class NativeBody:
 	extends RigidBody3D
@@ -44,11 +46,9 @@ var _rear_result: Dictionary = {}
 var _drive_result: Dictionary = {}
 var _joints: Array[Joint3D] = []
 var _feet: Array[CollisionShape3D] = []
-var _foot_visuals: Array[MeshInstance3D] = []
-var _rider_visual: Node3D
+var _rider_visual: RiderVisual
+var _bike_visual: BikeVisual
 var _rider_collision: CollisionShape3D
-var _front_rods: Array[MeshInstance3D] = []
-var _swingarm: Array[MeshInstance3D] = []
 var _body_forward: float = 0.0
 var _body_side: float = 0.0
 var _body_lean: float = 0.0
@@ -63,6 +63,18 @@ var crashed: bool = false
 var crash_reason: String = ""
 var _built: bool = false
 var _reset_pending: bool = false
+## Optional virtual human rider actuates only the finite steering bearing.
+## Rider intent uses body lean and a chosen line, actuated through bars only.
+## There is no direct attitude/yaw force, transform overwrite or midair correction.
+var riding_mode: String = "virtual_rider"
+var _rider_steering_torque: float = 0.0
+var _rider_target_lean: float = 0.0
+var _steering_target: float = 0.0
+var _first_person: bool = false
+var _steering_integral: float = 0.0
+var _rider_heading := Vector3.FORWARD
+var _rider_line_origin := Vector3.ZERO
+var _heading_correction: float = 0.0
 
 static func _neutral_controls() -> Dictionary:
 	return {"throttle": 0.0, "frontBrake": 0.0, "rearBrake": 0.0,
@@ -133,8 +145,6 @@ func _build_bike() -> void:
 		foot.position = Vector3(side * 0.34, -0.62, 0.03)
 		chassis.add_child(foot)
 		_feet.append(foot)
-		_foot_visuals.append(_box_mesh(chassis, Vector3(0.12, 0.20, 0.22), foot.position,
-			Color(0.09, 0.10, 0.12)))
 	fork = _new_body("SteeringFork", float(config.Unsprung.ForkMass), HEAD)
 	fork.inertia = Vector3(0.15, 0.12, 0.06)
 	# A tiny stem guard gives the body an explicit collision/mass geometry.
@@ -220,26 +230,17 @@ func _make_wheel(wheel_name: String, radius: float, width: float,
 	wheel.physics_material_override = rubber
 	add_child(wheel)
 	var collision := CollisionShape3D.new()
-	var cylinder := CylinderShape3D.new()
-	cylinder.radius = radius
-	cylinder.height = width
-	collision.shape = cylinder
+	# Jolt's analytic cylinder has a real convex shoulder, not a faceted
+	# polygon. With collision_margin_fraction=0.9 the round shoulder follows
+	# a lean continuously; the outer wheel radius/width remain SI dimensions.
+	var tire_volume := CylinderShape3D.new()
+	tire_volume.radius = radius
+	tire_volume.height = width
+	tire_volume.margin = width * 0.45
+	collision.shape = tire_volume
 	collision.rotation.z = PI * 0.5
 	wheel.add_child(collision)
-	var tire_mesh := _cylinder_mesh(wheel, radius, width, Color(0.055, 0.06, 0.07))
-	tire_mesh.rotation.z = PI * 0.5
-	var rim := _cylinder_mesh(wheel, radius * 0.77, width * 1.04, Color(0.28, 0.32, 0.37))
-	rim.rotation.z = PI * 0.5
-	var inner := _cylinder_mesh(wheel, radius * 0.70, width * 1.06, Color(0.08, 0.10, 0.12))
-	inner.rotation.z = PI * 0.5
-	var hub := _cylinder_mesh(wheel, 0.062, width * 1.18, Color(0.75, 0.78, 0.82))
-	hub.rotation.z = PI * 0.5
-	for n in range(12):
-		var angle := TAU * n / 12.0
-		for side in [-1, 1]:
-			var spoke := _cylinder_mesh(wheel, 0.006, 0.3, Color(0.57, 0.61, 0.67))
-			_set_segment(spoke, Vector3(side * width * 0.55, 0, 0),
-				Vector3(side * width * 0.55, cos(angle) * radius * 0.73, sin(angle) * radius * 0.73))
+
 	return wheel
 
 func _reset_models() -> void:
@@ -259,6 +260,7 @@ func _reset_models() -> void:
 	_rider_roll_rate = 0
 	_air_time = 0
 	_last_rear_slide = false
+	_steering_integral = 0.0
 	crashed = false
 	crash_reason = ""
 	_crash_elapsed = 0
@@ -268,6 +270,8 @@ func reset_bike(spawn: Transform3D) -> bool:
 	if not _built or (crashed and _crash_elapsed < float(config.Crash.RecoveryDelay)):
 		return false
 	_reset_models()
+	_rider_heading = -spawn.basis.z
+	_rider_line_origin = spawn.origin
 	# Explicit rider recovery/spawn is the sole transform/velocity reset path.
 	# Normal riding and crashes never replace native motion with target poses.
 	var bodies: Array[RigidBody3D] = [chassis, fork, front_wheel, rear_wheel]
@@ -295,6 +299,16 @@ func set_controls(packet: Dictionary) -> void:
 			controls[key] = packet[key]
 	if _built:
 		_update_feet()
+
+func set_riding_mode(mode: String) -> bool:
+	if mode not in ["virtual_rider", "direct"]:
+		return false
+	riding_mode = mode
+	_steering_integral = 0.0
+	if _built:
+		_rider_heading = -chassis.global_basis.z
+		_rider_line_origin = chassis.global_position
+	return true
 
 func shift_gear(delta: int) -> bool:
 	return _built and not crashed and Drive.shift(drive_state, delta, controls, config.Drive)
@@ -374,8 +388,86 @@ func _apply_suspension(wheel: Wheel, parent_body: RigidBody3D,
 func _apply_steering(input: Dictionary) -> void:
 	var axis := chassis.global_basis * Vector3(0, cos(float(config.Steering.Caster)), sin(float(config.Steering.Caster)))
 	var rate := (fork.angular_velocity - chassis.angular_velocity).dot(axis)
-	var torque := axis * (-float(input.steer) * float(config.Steering.InputTorque)
-		- rate * float(config.Steering.Damping))
+	var damping := float(config.Steering.Damping)
+	var riding: Dictionary = config.get("VirtualRider", {})
+	var scalar := -float(input.steer) * float(config.Steering.InputTorque) - rate * damping
+	_rider_target_lean = 0.0
+	_heading_correction = 0.0
+	_steering_target = 0.0
+	if riding_mode == "virtual_rider" and not crashed:
+		# A real rider steers into a developing fall and countersteers to start
+		# a requested lean. The optional virtual human closes that sensor/motor
+		# loop through the handlebars, with finite strength and steering stops.
+		# Feedback is grounded only: no landing/pitch correction in the air.
+		var grounded := front_wheel.contact and rear_wheel.contact
+		var forward_speed := maxf(0.0, chassis.linear_velocity.dot(-chassis.global_basis.z))
+		var blend := smoothstep(0.6, 2.2, forward_speed) if grounded else 0.0
+		var relative := chassis.global_basis.inverse() * fork.global_basis
+		var angle := atan2(relative.x.z, relative.x.x)
+		var lean := _angles().x
+		var lean_rate := chassis.angular_velocity.dot(-chassis.global_basis.z)
+		var speed_squared := maxf(forward_speed * forward_speed, 2.0)
+		var wheelbase := float(config.Wheelbase)
+		var height := maxf(0.4, (chassis.global_transform * chassis.center_of_mass).y -
+			(front_wheel.contact_position.y + rear_wheel.contact_position.y) * 0.5)
+		var max_angle := float(config.Steering.MaxAngle)
+		var low_speed_lean := atan(speed_squared * tan(max_angle * 0.85) / (9.81 * wheelbase))
+		var front_surface: Dictionary = config.Surfaces.get(front_wheel.surface, config.Surfaces.dirt)
+		var rear_surface: Dictionary = config.Surfaces.get(rear_wheel.surface, config.Surfaces.dirt)
+		var grip_lean := minf(deg_to_rad(36.0), atan(minf(float(front_surface.Grip), float(rear_surface.Grip)) * 0.85))
+		var available_lean := minf(minf(deg_to_rad(49.0), grip_lean), low_speed_lean)
+		_rider_target_lean = clampf(float(input.steer) + float(input.lean) * 0.9, -1.0, 1.0) * available_lean
+		_heading_correction = 0.0
+		var forward := -chassis.global_basis.z
+		forward.y = 0.0
+		forward = forward.normalized()
+		if absf(float(input.steer)) + absf(float(input.lean)) > 0.025:
+			_rider_heading = forward
+			_rider_line_origin = chassis.global_position
+		elif grounded and forward_speed > 1.5 and bool(riding.get("MaintainHeading", true)):
+			var reference := _rider_heading
+			reference.y = 0.0
+			reference = reference.normalized()
+			var heading_error := atan2(reference.cross(forward).y, reference.dot(forward))
+			# Releasing directional input asks the virtual human to hold the
+			# chosen line. Looking ahead corrects drift through the same finite
+			# bars; there is no rail, yaw force or position constraint.
+			var right := reference.cross(Vector3.UP).normalized()
+			var lateral_error := (chassis.global_position - _rider_line_origin).dot(right)
+			heading_error -= atan(lateral_error / maxf(6.0, forward_speed * 1.5))
+			var yaw_rate := -chassis.angular_velocity.dot(Vector3.UP)
+			_heading_correction = clampf(atan(forward_speed * (heading_error * 3.0 - yaw_rate * 0.8) / 9.81),
+				-deg_to_rad(12.0), deg_to_rad(12.0))
+			_rider_target_lean += _heading_correction
+		var frequency := lerpf(float(riding.get("LowFrequency", 3.0)), float(riding.get("RollFrequency", 3.4)), smoothstep(2.0, 7.0, forward_speed))
+		var factor := height * wheelbase / speed_squared
+		# Roll equilibrium includes rider COM displaced from the frame centre.
+		var com_camber := atan2(chassis.center_of_mass.x, height)
+		var equilibrium := 9.81 * wheelbase * tan(clampf(lean + com_camber, -1.1, 1.1)) / speed_squared
+		_steering_target = clampf(equilibrium + factor * (frequency * frequency *
+			(lean - _rider_target_lean) + 2.0 * float(riding.get("RollDamping", 1.2)) * frequency * lean_rate), -max_angle, max_angle)
+		# Finite tire slip makes geometric steer understeer; the human rider
+		# feels this and adds bar travel, without adding grip or chassis torque.
+		var slip_compensation := clampf(float(rear_tire_state.get("slipAngle", 0.0)) -
+			float(front_tire_state.get("slipAngle", 0.0)), -0.22, 0.22)
+		_steering_target = clampf(_steering_target + slip_compensation, -max_angle, max_angle)
+		if grounded and blend > 0.1:
+			_steering_integral = clampf(_steering_integral + (_steering_target - angle) * get_physics_process_delta_time(), -0.025, 0.025)
+		else:
+			_steering_integral = 0.0
+		var bandwidth := maxf(1.0, speed_squared / 144.0)
+		var handlebar_torque := clampf(-(_steering_target - angle) * float(riding.get("BarStiffness", 600.0)) * bandwidth - rate * float(riding.get("BarDamping", 18.0)) * sqrt(bandwidth) - _steering_integral * float(riding.get("BarIntegral", 300.0)) * bandwidth,
+			-float(riding.get("MaxTorque", 45.0)), float(riding.get("MaxTorque", 45.0)))
+		# At walking pace use deliberate steering while feet carry balance.
+		var walking_angle := float(input.steer) * max_angle * 0.65
+		var walking_torque := clampf(-(walking_angle - angle) * 36.0 - rate * 5.0,
+			-float(config.Steering.InputTorque), float(config.Steering.InputTorque))
+		scalar = lerpf(walking_torque, handlebar_torque, blend)
+		if not grounded:
+			_steering_integral = 0.0
+			scalar = -float(input.steer) * float(config.Steering.InputTorque) - rate * damping
+	_rider_steering_torque = scalar
+	var torque := axis * scalar
 	fork.apply_torque(torque)
 	chassis.apply_torque(-torque)
 
@@ -424,8 +516,11 @@ func _apply_tire(wheel: Wheel, state: Dictionary, radius: float, dt: float) -> D
 	var usable_contact := wheel.contact and forward.length_squared() > 0.000001
 	forward = forward.normalized()
 	var right := forward.cross(normal).normalized()
-	var hub_velocity := wheel.linear_velocity - wheel.ground_velocity
-	# Translational hub transport, not tread speed (spin is separate input).
+	var non_spin_omega := wheel.angular_velocity - axle * wheel.angular_velocity.dot(axle)
+	var hub_velocity := wheel.linear_velocity + non_spin_omega.cross(
+		wheel.contact_position - wheel.global_position) - wheel.ground_velocity
+	# Contact transport includes non-spin roll/yaw motion. Only axial tread
+	# spin is supplied separately, so contact slip is neither lost nor doubled.
 	var input := {"normalLoad": wheel.normal_load, "contact": usable_contact,
 		"longitudinalVelocity": hub_velocity.dot(forward),
 		"lateralVelocity": hub_velocity.dot(right),
@@ -483,23 +578,25 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 		separation.x * separation.x + separation.y * separation.y) * reduced
 	if chassis.inertia.distance_squared_to(next_inertia) > 0.00000001:
 		chassis.inertia = next_inertia
-	_rider_visual.position = rider_position - Vector3(0, 0.54, 0.09)
-	_rider_visual.rotation = Vector3(-_body_forward * float(rider.MaxPitch), 0,
+	_rider_visual.update_pose(_body_forward, _body_side, _body_lean, _standing,
+		bool(controls.footDown) and not crashed)
+	var rider_rotation := Vector3(-_body_forward * float(rider.MaxPitch), 0,
 		-_body_lean * float(rider.MaxRoll))
 	if _rider_collision.position.distance_squared_to(rider_position) > 0.0000000001:
 		_rider_collision.position = rider_position
-	if _rider_collision.rotation.distance_squared_to(_rider_visual.rotation) > 0.0000000001:
-		_rider_collision.rotation = _rider_visual.rotation
+	if _rider_collision.rotation.distance_squared_to(rider_rotation) > 0.0000000001:
+		_rider_collision.rotation = rider_rotation
 
 func _advance_rider_axis(current: float, target: float, old_rate: float,
 		max_angle: float, move_rate: float, inertia: float, torque_limit: float,
 		dt: float) -> Vector2:
 	var angle_error := (target - current) * max_angle
 	var acceleration := torque_limit / maxf(inertia, 0.001)
-	# Brake to a stop over a finite articulation distance near the desired
-	# rider pose. Rider input is a pose command; the motorcycle has no target.
+	# A smooth pose servo avoids the old bang-bang braking law chattering
+	# around a held pose and injecting alternating torso-reaction torques.
+	# Acceleration stays bounded; the motorcycle has no upright pose target.
 	var desired_rate := signf(angle_error) * minf(move_rate * max_angle,
-		sqrt(2.0 * acceleration * absf(angle_error)))
+		absf(angle_error) * 8.0)
 	var next_rate := move_toward(old_rate, desired_rate, acceleration * dt)
 	var next_position := current + next_rate * dt / maxf(max_angle, 0.001)
 	return Vector2(clampf(next_position, -1.0, 1.0), next_rate)
@@ -509,7 +606,6 @@ func _update_feet() -> void:
 	for i in range(_feet.size()):
 		if _feet[i].disabled == feet_down:
 			_feet[i].set_deferred("disabled", not feet_down)
-		_foot_visuals[i].visible = feet_down
 
 func _angles() -> Vector2:
 	var up := chassis.global_basis.y
@@ -540,7 +636,7 @@ func _detect_crash(dt: float) -> void:
 			_crash("Loss of balance / low-side")
 		elif angles.y > float(config.Crash.LoopPitch) and not front_wheel.contact:
 			_crash("Wheelie loop-out")
-		elif speed > 4.0 and bool(_front_result.get("sliding", false)) and absf(float(_front_result.get("slipAngle", 0))) > 0.36:
+		elif speed > 4.0 and absf(angles.x) > deg_to_rad(50.0) and bool(_front_result.get("sliding", false)) and absf(float(_front_result.get("slipAngle", 0))) > 0.36:
 			_crash("Front-wheel washout")
 		elif _last_rear_slide and not bool(_rear_result.get("sliding", false)) and absf(chassis.angular_velocity.dot(-chassis.global_basis.z)) > 3.5 and absf(angles.x) > 0.45:
 			_crash("Rear grip recovery / high-side")
@@ -553,6 +649,7 @@ func _crash(reason: String) -> void:
 	crashed = true
 	crash_reason = reason
 	_crash_elapsed = 0
+	_steering_integral = 0.0
 	_update_feet()
 
 func get_telemetry() -> Dictionary:
@@ -579,14 +676,11 @@ func get_telemetry() -> Dictionary:
 		"rearOmega": rear_wheel.angular_velocity.dot(-rear_wheel.global_basis.x),
 		"steerAngle": atan2(relative.x.z, relative.x.x),
 		"roll": angles.x, "pitch": angles.y, "standing": bool(controls.standing),
+		"ridingMode": riding_mode, "riderSteeringTorque": _rider_steering_torque,
+		"riderTargetLean": _rider_target_lean, "steeringTarget": _steering_target,
+		"headingCorrection": _heading_correction,
 		"footDown": bool(controls.footDown), "crashed": crashed, "crashReason": crash_reason,
 		"recoveryRemaining": maxf(0, float(config.Crash.RecoveryDelay) - _crash_elapsed) if crashed else 0.0}
-
-func _material(color: Color) -> StandardMaterial3D:
-	var result := StandardMaterial3D.new()
-	result.albedo_color = color
-	result.roughness = 0.65
-	return result
 
 func _box_collision(body: RigidBody3D, size: Vector3, origin: Vector3) -> void:
 	var collision := CollisionShape3D.new()
@@ -596,97 +690,21 @@ func _box_collision(body: RigidBody3D, size: Vector3, origin: Vector3) -> void:
 	collision.position = origin
 	body.add_child(collision)
 
-func _box_mesh(parent_node: Node3D, size: Vector3, origin: Vector3, color: Color) -> MeshInstance3D:
-	var visual := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	visual.mesh = mesh
-	visual.position = origin
-	visual.material_override = _material(color)
-	parent_node.add_child(visual)
-	return visual
-
-func _cylinder_mesh(parent_node: Node3D, radius: float, height: float, color: Color) -> MeshInstance3D:
-	var visual := MeshInstance3D.new()
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = radius
-	mesh.bottom_radius = radius
-	mesh.height = height
-	mesh.radial_segments = 20
-	visual.mesh = mesh
-	visual.material_override = _material(color)
-	parent_node.add_child(visual)
-	return visual
-
-func _set_segment(mesh: MeshInstance3D, a: Vector3, b: Vector3) -> void:
-	var delta := b - a
-	mesh.position = (a + b) * 0.5
-	(mesh.mesh as CylinderMesh).height = maxf(delta.length(), 0.001)
-	var up := delta.normalized()
-	var tangent := Vector3.RIGHT if absf(up.dot(Vector3.RIGHT)) < 0.95 else Vector3.FORWARD
-	var right := tangent.cross(up).normalized()
-	mesh.basis = Basis(right, up, right.cross(up)).orthonormalized()
-
 func _build_visuals() -> void:
-	var silver := Color(0.44, 0.49, 0.54)
-	var dark := Color(0.075, 0.09, 0.115)
-	var orange := Color(0.97, 0.26, 0.055)
-	# A recognizable procedural MX chassis; all parts follow actual native
-	# body transforms and strut travel rather than canned wheel/lean animation.
-	for side in [-1.0, 1.0]:
-		var x: float = side * 0.115
-		for endpoints in [
-			[Vector3(x, 0.31, -0.28), Vector3(x, -0.26, -0.22)],
-			[Vector3(x, -0.26, -0.22), Vector3(x, -0.26, 0.28)],
-			[Vector3(x, -0.26, 0.28), Vector3(x, 0.27, 0.14)],
-			[Vector3(x, 0.27, 0.14), Vector3(x, 0.31, -0.28)],
-			[Vector3(x, 0.24, 0.10), Vector3(x, 0.23, 0.59)]
-		]:
-			var tube := _cylinder_mesh(chassis, 0.018, 1.0, silver)
-			_set_segment(tube, endpoints[0], endpoints[1])
-		_swingarm.append(_cylinder_mesh(chassis, 0.026, 1.0, silver))
-		_front_rods.append(_cylinder_mesh(fork, 0.022, 1.0, Color(0.78, 0.71, 0.49)))
-	_box_mesh(chassis, Vector3(0.26, 0.22, 0.28), Vector3(0, -0.11, 0.05), silver)
-	_box_mesh(chassis, Vector3(0.26, 0.10, 0.53), Vector3(0, 0.28, 0.24), dark)
-	_box_mesh(chassis, Vector3(0.30, 0.21, 0.33), Vector3(0, 0.21, -0.12), orange)
-	_box_mesh(chassis, Vector3(0.17, 0.045, 0.46), Vector3(0, 0.25, 0.64), orange)
-	var front_fender := _box_mesh(fork, Vector3(0.16, 0.035, 0.48), Vector3(0, -0.16, -0.28), orange)
-	front_fender.rotation.x = -0.08
-	_box_mesh(fork, Vector3(0.25, 0.23, 0.04), Vector3(0, 0.03, -0.11), Color(0.94, 0.94, 0.87))
-	var bar := _cylinder_mesh(fork, 0.012, 0.68, dark)
-	bar.position = Vector3(0, 0.13, -0.015)
-	bar.rotation.z = PI * 0.5
-	var silencer := _cylinder_mesh(chassis, 0.055, 0.44, silver)
-	silencer.position = Vector3(0.20, 0.16, 0.40)
-	silencer.rotation.x = PI * 0.5
-	_rider_visual = Node3D.new()
-	_rider_visual.name = "RiderArticulation"
+	_rider_visual = RiderVisual.new()
 	chassis.add_child(_rider_visual)
-	var jersey := _box_mesh(_rider_visual, Vector3(0.30, 0.36, 0.20), Vector3(0, 0.59, 0.09), Color(0.12, 0.26, 0.39))
-	jersey.rotation.x = -0.20
-	var helmet := MeshInstance3D.new()
-	var helmet_mesh := SphereMesh.new()
-	helmet_mesh.radius = 0.13
-	helmet_mesh.height = 0.25
-	helmet.mesh = helmet_mesh
-	helmet.position = Vector3(0, 0.89, -0.005)
-	helmet.material_override = _material(Color(0.91, 0.91, 0.85))
-	_rider_visual.add_child(helmet)
-	_box_mesh(_rider_visual, Vector3(0.22, 0.055, 0.13), Vector3(0, 0.88, -0.115), dark)
-	for side in [-1.0, 1.0]:
-		var thigh := _cylinder_mesh(_rider_visual, 0.065, 0.34, dark)
-		_set_segment(thigh, Vector3(side * 0.10, 0.43, 0.21), Vector3(side * 0.18, 0.09, 0.03))
-		var calf := _cylinder_mesh(_rider_visual, 0.052, 0.32, dark)
-		_set_segment(calf, Vector3(side * 0.18, 0.09, 0.03), Vector3(side * 0.21, -0.21, 0.13))
-		var arm := _cylinder_mesh(_rider_visual, 0.047, 0.40, Color(0.12, 0.26, 0.39))
-		_set_segment(arm, Vector3(side * 0.16, 0.71, 0.02), Vector3(side * 0.29, 0.48, -0.32))
+	_rider_visual.configure(chassis, fork)
+	_bike_visual = BikeVisual.new()
+	chassis.add_child(_bike_visual)
+	_bike_visual.configure(chassis, fork, front_wheel, rear_wheel, config)
 
 func _update_visuals() -> void:
-	var front_local := fork.global_transform.affine_inverse() * front_wheel.global_position
-	var rear_local := chassis.global_transform.affine_inverse() * rear_wheel.global_position
-	for i in range(2):
-		var side: float = -1.0 if i == 0 else 1.0
-		_set_segment(_front_rods[i], Vector3(side * 0.055, 0.02, 0.0),
-			front_local + Vector3(side * 0.055, 0, 0))
-		_set_segment(_swingarm[i], Vector3(side * 0.11, -0.12, 0.17),
-			rear_local + Vector3(side * 0.07, 0, 0))
+	_bike_visual.update_geometry()
+
+func get_rider_camera_transform() -> Transform3D:
+	return _rider_visual.get_camera_transform() if _rider_visual != null else chassis.global_transform
+
+func set_first_person(enabled: bool) -> void:
+	_first_person = enabled
+	if _rider_visual != null:
+		_rider_visual.set_first_person(enabled)

@@ -6,7 +6,7 @@ config/name="Dirtline MX"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/description="250F motocross simulation prototype"
-config/version="0.1.0"
+config/version="0.2.0"
 
 [display]
 window/size/viewport_width=1280
@@ -21,6 +21,7 @@ window/stretch/mode="canvas_items"
 common/physics_ticks_per_second=240
 common/max_physics_steps_per_frame=32
 jolt_physics_3d/limits/max_angular_velocity=250.0
+jolt_physics_3d/collisions/collision_margin_fraction=0.9
 
 [rendering]
 renderer/rendering_method="gl_compatibility"

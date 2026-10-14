@@ -2,6 +2,16 @@
 
 The cloud machine can execute the actual Linux Godot/Jolt engine and render the native game window with software OpenGL. It cannot execute a Windows desktop or evaluate riding feel as a human rider. Keep those outcomes separate.
 
+## Version 0.2 handling and player workflow
+
+The default is now the user-selected virtual rider. Steering effort is physically bounded at 45 Nm and paired with the chassis; requested lean is capped by speed/geometry, surface grip and a 36° comfort limit. Neutral chosen-line corrections also act through those handlebars. Direct mode bypasses rider steering feedback. There are no chassis pose/position constraints or airborne landing corrections. The tire crown uses continuous native rounded-cylinder support, and tire slip includes non-spin patch transport. Brief sliding is recoverable; a washout requires actual departing lean rather than a single slip spike.
+
+New handling checks pass 18 assertions for bounded steering, unsupported stationary fall, actual rider movement, airborne gravity/attitude and camera anchoring. The independent playability suite passes 42 assertions: a 14-second keyboard/manual-shift run covers 256 m without crashing; maximum lateral drift over the first 100 m is 0.95 m with 0.28° heading change. Full steering in either direction holds about 25° bank for ten seconds at roughly 10.5 m/s, turning over 200° without wrong-side banking or falling. Separate moderate rider lean causes measurable banking in both directions, but some oscillation/asymmetry remains and needs rider feedback.
+
+The real main-scene welcome button and E/W/B/F/Shift/E events support a five-second, 19.7 m launch. The input/camera suite passes 44 assertions for remapped commands, axis edges/inversion, persistence, selected-device isolation, mode/camera transforms and recovery. R explicitly remounts seated with feet down, clutch pulled and neutral; native physics confirms it remains upright and stationary. Menu/focus changes preserve feet and posture. Helmet and chase views, visible bars/gloves, detailed gear, and scrollable rebinding/settings menus were rendered and inspected at 1280×720.
+
+Controller analog polling was tested through binding/routing mathematics; actual joystick hardware is unavailable. Synthetic button/axis commands exercise the game dispatcher, but do not establish controller hardware behavior. Windows execution also remains untested on Windows.
+
 ## Automated workflow
 
 Run `bash standalone/tools/check.sh`. Preserve command failures and engine error output. Export and package only the current passing revision with `bash standalone/tools/package_windows.sh`. The package verifies every shipped file against the current export and records its SHA-256 in `downloads/SHA256SUMS`.
@@ -12,7 +22,9 @@ The native scenario suite passes 78 checks using real rigid bodies, cylinder tir
 
 The gyroscope suite passes 10 cases and 50 checks. It measures actual Jolt rigid bodies with explicit inertia. The uncorrected native baseline exhibits about 15.4% peak world-angular-momentum drift over 0.5 seconds. Implicit midpoint Euler correction limits peak drift to about 0.98% at 240 Hz for 30 and 100 rad/s rotors, falling to about 0.49% at 480 Hz. Maximum relative energy error stays below 0.001%. These are bounded test scenarios, not universal error guarantees. Constraint/contact integration and changing aggregate rider inertia still introduce additional approximation.
 
-Track geometry was also checked with 1,070 native profile/continuity rays and eight wheel-sized cylinder drops at the spawn, whoop crest, tabletop, rut bottom, jump runoff and grip pads. The lab has 13 static surface bodies, eight ordered gates and seven stations. Exact triangle-edge ray queries can miss because of floating-point rounding; the riding model uses native wheel volume contact.
+The earlier course was checked with 1,070 profile/continuity rays and eight cylinder drops. Version 0.2 expands the course to a roughly 80 × 158 m loop, 10 m road, 30 m corners, a 40 m flat start, a separate 100 m practice straight and longer jump approaches/landings. Its fresh native geometry probes pass at the spawn, flat launch, obstacles, practice surfaces and retained grip pads. It has 14 static surface bodies and about 95,640 triangles. Exact triangle-edge rays can miss because of floating-point rounding; riding uses native wheel volume contact.
+
+Reported Jolt contact impulses are estimated collision responses rather than final joint-coupled solver impulses. Tire loads are therefore approximations; real native wheel geometry/contact supports the bike. See the [Godot 4.6.3 contact adapter](https://github.com/godotengine/godot/blob/4.6.3-stable/modules/jolt_physics/spaces/jolt_contact_listener_3d.cpp#L209).
 
 Native graphical checks exercise the main scene, welcome/help/setup screens and gameplay HUD at 1280×720. A parked U-input test changes front spring stiffness through the displayed SpinBox and verifies the bike receives the setup; an H-input test opens help. Audio synthesis is implemented, but the cloud machine has no physical sound output or controller hardware.
 

@@ -4,11 +4,17 @@ extends RefCounted
 ## Wheel contacts use the native static triangle collision; tyre friction is supplied
 ## by the motorcycle model, so the terrain's native friction deliberately stays zero.
 
-const ROAD_HALF_WIDTH := 4.0
+const ROAD_HALF_WIDTH := 5.0
 const SHOULDER_WIDTH := 2.0
 const GROUND_HEIGHT := -0.24
 const ROAD_HEIGHT := 0.04
-const LOOP_RADIUS := 20.0
+const LOOP_RADIUS := 30.0
+const WEST_X := -34.0
+const EAST_X := 46.0
+const STRAIGHT_END := 42.0
+const LOOP_EDGE := STRAIGHT_END + LOOP_RADIUS
+const LARGE_JUMP_X := 62.0
+const PRACTICE_X := -63.0
 const DIRT := Color(0.43, 0.29, 0.16)
 const GRASS := Color(0.22, 0.31, 0.12)
 const SAND := Color(0.69, 0.57, 0.35)
@@ -25,49 +31,54 @@ static func build(parent: Node3D) -> Dictionary:
 	world.name = "DirtlineProvingGround"
 	parent.add_child(world)
 	_box_surface(world, "GrassBase", Vector3(0.0, GROUND_HEIGHT - 0.5, 0.0),
-		Vector3(232.0, 1.0, 216.0), "grass", GRASS)
+		Vector3(310.0, 1.0, 280.0), "grass", GRASS)
 	_build_main_ribbon(world)
+	_build_practice_ground(world)
 	_build_large_jump(world)
 	_build_traction_pads(world)
 	_build_pit(world)
 	_build_scenery(world)
 	var gates: Array = []
-	gates.append(_gate(world, 0, Vector3(-22.0, ROAD_HEIGHT, 19.0), Vector3.FORWARD, "START / FINISH"))
-	gates.append(_gate(world, 1, Vector3(-22.0, ROAD_HEIGHT, -24.0), Vector3.FORWARD, "NORTH STRAIGHT"))
-	gates.append(_gate(world, 2, Vector3(4.0, ROAD_HEIGHT, -47.0), Vector3.RIGHT, "SAND TURN"))
-	gates.append(_gate(world, 3, Vector3(30.0, ROAD_HEIGHT, -24.0), Vector3.BACK, "RUT CHANNELS"))
-	gates.append(_gate(world, 4, Vector3(30.0, ROAD_HEIGHT, -8.0), Vector3.BACK, "TABLETOP APPROACH"))
-	gates.append(_gate(world, 5, Vector3(30.0, ROAD_HEIGHT, 23.0), Vector3.BACK, "LANDING EXIT"))
-	gates.append(_gate(world, 6, Vector3(4.0, ROAD_HEIGHT, 47.0), Vector3.LEFT, "TRACTION STRAIGHT"))
+	gates.append(_gate(world, 0, Vector3(WEST_X, ROAD_HEIGHT, 31.0), Vector3.FORWARD, "START / FINISH"))
+	gates.append(_gate(world, 1, Vector3(WEST_X, ROAD_HEIGHT, -40.5), Vector3.FORWARD, "NORTH STRAIGHT"))
+	gates.append(_gate(world, 2, Vector3(6.0, ROAD_HEIGHT, -LOOP_EDGE), Vector3.RIGHT, "SAND TURN"))
+	gates.append(_gate(world, 3, Vector3(EAST_X, ROAD_HEIGHT, -30.0), Vector3.BACK, "RUT CHANNELS"))
+	gates.append(_gate(world, 4, Vector3(EAST_X, ROAD_HEIGHT, -17.0), Vector3.BACK, "TABLETOP APPROACH"))
+	gates.append(_gate(world, 5, Vector3(EAST_X, ROAD_HEIGHT, 27.0), Vector3.BACK, "LANDING EXIT"))
+	gates.append(_gate(world, 6, Vector3(6.0, ROAD_HEIGHT, LOOP_EDGE), Vector3.LEFT, "TRACTION STRAIGHT"))
 	var last_angle := deg_to_rad(157.5)
-	var last_position := Vector3(-2.0 + 20.0 * cos(last_angle), ROAD_HEIGHT + _corner_bank(0.75) * 4.0,
-		27.0 + 20.0 * sin(last_angle))
+	var last_position := Vector3(-4.0 + LOOP_RADIUS * cos(last_angle),
+		ROAD_HEIGHT + _corner_bank(0.75) * ROAD_HALF_WIDTH,
+		STRAIGHT_END + LOOP_RADIUS * sin(last_angle))
 	gates.append(_gate(world, 7, last_position, Vector3(-sin(last_angle), 0.0, cos(last_angle)), "SOUTH BERM"))
 	var stations: Array = [
-		_station(world, "01 / BRAKING BUMPS", "0.12–0.22 m • independent brakes", Vector3(-30.5, 0.0, 14.0), 0.0),
-		_station(world, "02 / WHOOPS", "0.45 m • 4 m spacing • rider position", Vector3(-30.5, 0.0, -7.0), 0.0),
-		_station(world, "03 / BANKED BERMS", "20 m radius • progressive 15° banking", Vector3(-12.0, 0.0, -35.0), PI),
-		_station(world, "04 / RUT CHANNELS", "0.16 m deep • 1.5 m separation", Vector3(20.8, 0.0, -22.0), PI),
-		_station(world, "05 / TABLETOP", "1.3 m high • 10 m deck • 12 m landing", Vector3(19.0, 0.0, 4.0), PI),
-		_station(world, "06 / LARGE JUMP", "2.6 m lip • 18 m run-up • 20 m landing", Vector3(47.0, 0.0, -24.0), 0.0),
+		_station(world, "00 / PRACTICE GROUND", "100 m flat straight • wide launch pad", Vector3(-77.0, 0.0, 19.0), 0.0),
+		_station(world, "01 / BRAKING BUMPS", "0.12–0.22 m • independent brakes", Vector3(-44.0, 0.0, -9.0), 0.0),
+		_station(world, "02 / WHOOPS", "0.45 m • 4 m spacing • rider position", Vector3(-44.0, 0.0, -30.0), 0.0),
+		_station(world, "03 / BANKED BERMS", "30 m radius • progressive 15° banking", Vector3(-17.0, 0.0, -54.0), PI),
+		_station(world, "04 / RUT CHANNELS", "0.16 m deep • 1.5 m separation", Vector3(36.0, 0.0, -31.0), PI),
+		_station(world, "05 / TABLETOP", "1.3 m high • 10 m deck • 16 m landing", Vector3(35.0, 0.0, -2.0), PI),
+		_station(world, "06 / LARGE JUMP", "2.6 m lip • 30 m run-up • 24 m landing", Vector3(73.0, 0.0, -31.0), 0.0),
 		_station(world, "07 / TRACTION PADS", "HARDPACK / SAND / MUD / LOAM", Vector3(0.0, 0.0, 27.0), 0.0),
 	]
-	return {"spawn": Transform3D(Basis.IDENTITY, Vector3(-22.0, 0.95, 22.0)),
-		"gates": gates, "stations": stations}
+	return {"spawn": Transform3D(Basis.IDENTITY, Vector3(WEST_X, 0.95, 34.0)),
+		"practice_spawn": Transform3D(Basis.IDENTITY, Vector3(PRACTICE_X, 0.95, 34.0)),
+		"gates": gates, "stations": stations,
+		"circuit_width": ROAD_HALF_WIDTH * 2.0, "flat_launch_length": 40.0}
 
 
 static func _build_main_ribbon(parent: Node3D) -> void:
 	# Shared rows keep the collision continuous across changes of material and
 	# obstacles. One indexed mesh/concave collider per surface, not stacked boxes.
 	var rows: Array = []
-	_add_line(rows, Vector2(-22.0, 27.0), Vector2(-22.0, -27.0), 68)
-	_add_arc(rows, Vector2(-2.0, -27.0), PI, PI * 1.5, 40)
-	_add_line(rows, Vector2(-2.0, -47.0), Vector2(10.0, -47.0), 16)
-	_add_arc(rows, Vector2(10.0, -27.0), -PI * 0.5, 0.0, 40)
-	_add_line(rows, Vector2(30.0, -27.0), Vector2(30.0, 27.0), 90)
-	_add_arc(rows, Vector2(10.0, 27.0), 0.0, PI * 0.5, 40)
-	_add_line(rows, Vector2(10.0, 47.0), Vector2(-2.0, 47.0), 16)
-	_add_arc(rows, Vector2(-2.0, 27.0), PI * 0.5, PI, 40)
+	_add_line(rows, Vector2(WEST_X, STRAIGHT_END), Vector2(WEST_X, -STRAIGHT_END), 168)
+	_add_arc(rows, Vector2(-4.0, -STRAIGHT_END), PI, PI * 1.5, 48)
+	_add_line(rows, Vector2(-4.0, -LOOP_EDGE), Vector2(16.0, -LOOP_EDGE), 24)
+	_add_arc(rows, Vector2(16.0, -STRAIGHT_END), -PI * 0.5, 0.0, 48)
+	_add_line(rows, Vector2(EAST_X, -STRAIGHT_END), Vector2(EAST_X, STRAIGHT_END), 168)
+	_add_arc(rows, Vector2(16.0, STRAIGHT_END), 0.0, PI * 0.5, 48)
+	_add_line(rows, Vector2(16.0, LOOP_EDGE), Vector2(-4.0, LOOP_EDGE), 24)
+	_add_arc(rows, Vector2(-4.0, STRAIGHT_END), PI * 0.5, PI, 48)
 	rows.append(rows[0])
 	var builders: Dictionary = {}
 	for surface in ["dirt", "sand", "mud", "hardpack", "loam"]:
@@ -77,7 +88,7 @@ static func _build_main_ribbon(parent: Node3D) -> void:
 		builders[surface] = tool
 	# Quarter-metre columns include both 0.75 m rut centres. Coarser sampling
 	# would silently flatten the 0.16 m grooves before native collision.
-	const COLUMNS := 48
+	const COLUMNS := 56
 	for row_index in range(rows.size() - 1):
 		var first: Dictionary = rows[row_index]
 		var second: Dictionary = rows[row_index + 1]
@@ -85,8 +96,8 @@ static func _build_main_ribbon(parent: Node3D) -> void:
 		var surface := _main_surface(midpoint)
 		var tool: SurfaceTool = builders[surface]
 		for column in range(COLUMNS):
-			var u0 := lerpf(-6.0, 6.0, float(column) / COLUMNS)
-			var u1 := lerpf(-6.0, 6.0, float(column + 1) / COLUMNS)
+			var u0 := lerpf(-7.0, 7.0, float(column) / COLUMNS)
+			var u1 := lerpf(-7.0, 7.0, float(column + 1) / COLUMNS)
 			var a := _ribbon_vertex(first, u0)
 			var b := _ribbon_vertex(first, u1)
 			var c := _ribbon_vertex(second, u0)
@@ -125,34 +136,36 @@ static func _ribbon_vertex(row: Dictionary, lateral: float) -> Vector3:
 	var position := center + right * lateral
 	var shoulder := _smoothstep(ROAD_HALF_WIDTH, ROAD_HALF_WIDTH + SHOULDER_WIDTH, absf(lateral))
 	var height := ROAD_HEIGHT + float(row.bank) * (ROAD_HALF_WIDTH - lateral)
-	if is_equal_approx(center.x, -22.0):
+	if is_equal_approx(center.x, WEST_X):
 		height += _west_obstacle(center.y)
-	elif is_equal_approx(center.x, 30.0):
+	elif is_equal_approx(center.x, EAST_X):
 		height += _tabletop_height(center.y)
-		var rut_envelope := _window(center.y, -26.0, -17.0, 1.0)
+		var rut_envelope := _window(center.y, -40.0, -25.0, 1.5)
 		height -= 0.16 * rut_envelope * maxf(_rut(lateral - 0.75), _rut(lateral + 0.75))
 	return Vector3(position.x, lerpf(height, GROUND_HEIGHT, shoulder), position.y)
 
 
 static func _west_obstacle(z: float) -> float:
-	if z >= 10.0 and z <= 18.0:
-		var distance := 18.0 - z
+	# Spawn z=34 to z=-6 is deliberately level: riders can learn the launch
+	# and balance before the first obstacle, rather than immediately hit bumps.
+	if z >= -14.0 and z <= -6.0:
+		var distance := -6.0 - z
 		var bump := mini(int(distance / 2.0), 3)
 		var heights := [0.12, 0.22, 0.16, 0.18]
 		return float(heights[bump]) * (0.5 - 0.5 * cos(TAU * fmod(distance, 2.0) / 2.0))
-	if z >= -18.0 and z <= -2.0:
-		return 0.45 * (0.5 - 0.5 * cos(TAU * (-2.0 - z) / 4.0))
+	if z >= -40.0 and z <= -24.0:
+		return 0.45 * (0.5 - 0.5 * cos(TAU * (-24.0 - z) / 4.0))
 	return 0.0
 
 
 static func _tabletop_height(z: float) -> float:
-	if z >= -7.0 and z < -1.0:
+	if z >= -15.0 and z < -7.0:
 		# Convex takeoff preserves an upward contact normal/tangent at the lip.
-		return 1.3 * pow((z + 7.0) / 6.0, 1.6)
-	if z >= -1.0 and z <= 9.0:
+		return 1.3 * pow((z + 15.0) / 8.0, 1.6)
+	if z >= -7.0 and z <= 3.0:
 		return 1.3
-	if z > 9.0 and z < 21.0:
-		return 1.3 * (1.0 - _smoothstep(9.0, 21.0, z))
+	if z > 3.0 and z < 19.0:
+		return 1.3 * (1.0 - _smoothstep(3.0, 19.0, z))
 	return 0.0
 
 
@@ -161,20 +174,21 @@ static func _rut(distance: float) -> float:
 
 
 static func _main_surface(point: Vector2) -> String:
-	if point.y < -46.9:
+	if point.y < -LOOP_EDGE + 0.1:
 		return "sand"
-	if point.y > 46.9:
-		return "mud" if point.x > 4.0 else "hardpack"
-	if point.x > 29.9 and point.y < -16.5:
+	if point.y > LOOP_EDGE - 0.1:
+		return "mud" if point.x > 6.0 else "hardpack"
+	if point.x > EAST_X - 0.1 and point.y < -24.5:
 		return "loam"
 	return "dirt"
 
 
 static func _build_large_jump(parent: Node3D) -> void:
-	# Separate proving lane: 18 m flat run-up, 7 m curved launch, 8 m gap,
-	# 20 m landing and 20 m flat runoff. The gap exposes the grass below.
-	for section in [{"name": "RunupAndLip", "start": -45.0, "finish": -20.0},
-		{"name": "LandingAndRunoff", "start": -12.0, "finish": 28.0}]:
+	# Separate proving lane: 30 m flat run-up, 9 m curved launch, 8 m gap,
+	# 24 m landing and 36 m flat runoff. Heights stay in real motocross metres;
+	# expanding the venue does not scale suspension obstacles into giant walls.
+	for section in [{"name": "RunupAndLip", "start": -64.0, "finish": -25.0},
+		{"name": "LandingAndRunoff", "start": -17.0, "finish": 43.0}]:
 		var tool := SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tool.set_smooth_group(0)
@@ -182,9 +196,9 @@ static func _build_large_jump(parent: Node3D) -> void:
 		for index in range(steps):
 			var z0 := lerpf(float(section.start), float(section.finish), float(index) / steps)
 			var z1 := lerpf(float(section.start), float(section.finish), float(index + 1) / steps)
-			for column in range(16):
-				var x0 := lerpf(-4.0, 4.0, float(column) / 16.0)
-				var x1 := lerpf(-4.0, 4.0, float(column + 1) / 16.0)
+			for column in range(28):
+				var x0 := lerpf(-7.0, 7.0, float(column) / 28.0)
+				var x1 := lerpf(-7.0, 7.0, float(column + 1) / 28.0)
 				var a := _jump_vertex(x0, z0)
 				var b := _jump_vertex(x1, z0)
 				var c := _jump_vertex(x0, z1)
@@ -192,22 +206,65 @@ static func _build_large_jump(parent: Node3D) -> void:
 				_triangle(tool, a, c, b, "dirt", x0, x0, x1)
 				_triangle(tool, b, c, d, "dirt", x1, x0, x1)
 		_finish_surface(parent, "LargeJump_" + str(section.name), tool, "dirt")
-	_pole(parent, Vector3(35.8, 0.0, -27.0), 1.0, ORANGE)
-	_pole(parent, Vector3(42.2, 0.0, -27.0), 1.0, ORANGE)
-	_pole(parent, Vector3(35.8, 0.0, 28.0), 1.0, CREAM)
-	_pole(parent, Vector3(42.2, 0.0, 28.0), 1.0, CREAM)
-	_label(parent, "LARGE JUMP →", Vector3(39.0, 1.7, -43.0), 0.0, 32, ORANGE)
-	_label(parent, "20 m RUNOFF", Vector3(44.0, 1.0, 18.0), 0.0, 25, CREAM)
+	for side in [-1.0, 1.0]:
+		_pole(parent, Vector3(LARGE_JUMP_X + side * 6.1, 0.0, -34.0), 1.0, ORANGE)
+		_pole(parent, Vector3(LARGE_JUMP_X + side * 6.1, 0.0, 43.0), 1.0, CREAM)
+	_label(parent, "LARGE JUMP →", Vector3(LARGE_JUMP_X, 1.7, -60.0), 0.0, 36, ORANGE)
+	_label(parent, "36 m RUNOFF", Vector3(71.0, 1.0, 25.0), 0.0, 25, CREAM)
 
 
 static func _jump_vertex(lateral: float, z: float) -> Vector3:
 	var height := ROAD_HEIGHT
-	if z >= -27.0 and z <= -20.0:
-		height += 2.6 * pow((z + 27.0) / 7.0, 1.8)
-	elif z >= -12.0 and z < 8.0:
-		height += 2.1 * (1.0 - _smoothstep(-12.0, 8.0, z))
-	var shoulder := _smoothstep(3.0, 4.0, absf(lateral))
-	return Vector3(39.0 + lateral, lerpf(height, GROUND_HEIGHT, shoulder), z)
+	if z >= -34.0 and z <= -25.0:
+		height += 2.6 * pow((z + 34.0) / 9.0, 1.8)
+	elif z >= -17.0 and z < 7.0:
+		height += 2.1 * (1.0 - _smoothstep(-17.0, 7.0, z))
+	var shoulder := _smoothstep(ROAD_HALF_WIDTH, ROAD_HALF_WIDTH + SHOULDER_WIDTH, absf(lateral))
+	return Vector3(LARGE_JUMP_X + lateral, lerpf(height, GROUND_HEIGHT, shoulder), z)
+
+
+static func _build_practice_ground(parent: Node3D) -> void:
+	# One continuous native mesh combines the 100 m straight, wide flat launch
+	# pad and connection to the main loop. All outer edges meet the grass at
+	# exactly GROUND_HEIGHT, rather than use stacked slabs with hidden kerbs.
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	tool.set_smooth_group(0)
+	const COLUMNS := 50
+	const ROWS := 150
+	for row in range(ROWS):
+		var z0 := lerpf(-68.0, 48.0, float(row) / ROWS)
+		var z1 := lerpf(-68.0, 48.0, float(row + 1) / ROWS)
+		for column in range(COLUMNS):
+			var x0 := lerpf(-81.0, -41.0, float(column) / COLUMNS)
+			var x1 := lerpf(-81.0, -41.0, float(column + 1) / COLUMNS)
+			var a := _practice_vertex(x0, z0)
+			var b := _practice_vertex(x1, z0)
+			var c := _practice_vertex(x0, z1)
+			var d := _practice_vertex(x1, z1)
+			_triangle(tool, a, c, b, "hardpack", 0.0, 0.0, 0.0)
+			_triangle(tool, b, c, d, "hardpack", 0.0, 0.0, 0.0)
+	_finish_surface(parent, "PracticeGround_hardpack", tool, "hardpack")
+	_label(parent, "FREE PRACTICE / 100 m FLAT", Vector3(PRACTICE_X, 1.3, 46.0), 0.0, 34, CREAM)
+	_label(parent, "← PRACTICE", Vector3(-42.0, 1.0, 25.0), PI * 0.5, 27, CREAM)
+	for side in [-1.0, 1.0]:
+		for z in [-60.0, -36.0, -12.0, 12.0]:
+			_pole(parent, Vector3(PRACTICE_X + side * 9.0, GROUND_HEIGHT, z), 0.65, CREAM)
+	# Paint remains visual and has no physics shape.
+	for z in [28.0, 31.0, 34.0]:
+		_visual_box(parent, Vector3(PRACTICE_X, ROAD_HEIGHT + 0.005, z),
+			Vector3(2.2, 0.008, 0.08), CREAM)
+
+
+static func _practice_vertex(x: float, z: float) -> Vector3:
+	var lane := 1.0 - maxf(_smoothstep(6.0, 8.0, absf(x - PRACTICE_X)),
+		_smoothstep(50.0, 52.0, absf(z + 16.0)))
+	var pad := 1.0 - maxf(_smoothstep(14.0, 18.0, absf(x - PRACTICE_X)),
+		_smoothstep(12.0, 14.0, absf(z - 34.0)))
+	var connection := (1.0 - _smoothstep(4.0, 6.0, absf(z - 28.0)))
+	connection *= _smoothstep(-52.0, -49.0, x) * (1.0 - _smoothstep(-43.0, -41.0, x))
+	var level := maxf(lane, maxf(pad, connection))
+	return Vector3(x, lerpf(GROUND_HEIGHT, ROAD_HEIGHT, level), z)
 
 
 static func _build_traction_pads(parent: Node3D) -> void:
@@ -249,24 +306,24 @@ static func _pad_vertex(center: Vector3, x: float, z: float) -> Vector3:
 static func _build_pit(parent: Node3D) -> void:
 	# Visual service canopy and a small concrete tuning pad. All routes out of
 	# the start pad remain clear; native contact is never hidden by scenery.
-	_box_surface(parent, "ServicePad", Vector3(-43.0, GROUND_HEIGHT - 0.015, 24.0),
+	_box_surface(parent, "ServicePad", Vector3(-89.0, GROUND_HEIGHT - 0.015, 38.0),
 		Vector3(12.0, 0.07, 14.0), "concrete", Color(0.39, 0.42, 0.39))
-	for x in [-48.0, -38.0]:
-		for z in [19.0, 29.0]:
+	for x in [-94.0, -84.0]:
+		for z in [33.0, 43.0]:
 			_visual_box(parent, Vector3(x, 1.2, z), Vector3(0.1, 3.0, 0.1), INK)
-	_visual_box(parent, Vector3(-43.0, 2.8, 24.0), Vector3(12.0, 0.18, 12.0), ORANGE)
-	_visual_box(parent, Vector3(-43.0, 0.36, 29.0), Vector3(6.0, 0.65, 0.6), INK)
-	_label(parent, "DIRTLINE / MX", Vector3(-43.0, 3.5, 18.0), 0.0, 58, CREAM)
-	_label(parent, "250F • PHYSICS LAB", Vector3(-43.0, 2.1, 18.0), 0.0, 29, CREAM)
-	_label(parent, "MANUAL CONTROLS · NO RIDING ASSISTS", Vector3(-22.0, 0.6, 25.7), 0.0, 23, CREAM)
+	_visual_box(parent, Vector3(-89.0, 2.8, 38.0), Vector3(12.0, 0.18, 12.0), ORANGE)
+	_visual_box(parent, Vector3(-89.0, 0.36, 43.0), Vector3(6.0, 0.65, 0.6), INK)
+	_label(parent, "DIRTLINE / MX", Vector3(-89.0, 3.5, 32.0), 0.0, 58, CREAM)
+	_label(parent, "250F • PHYSICS LAB", Vector3(-89.0, 2.1, 32.0), 0.0, 29, CREAM)
+	_label(parent, "40 m FLAT LAUNCH · PRACTICE TO THE LEFT", Vector3(WEST_X, 0.6, 39.7), 0.0, 23, CREAM)
 	# Start grid paint stays visual; no coplanar physics bodies.
-	for index in range(8):
+	for index in range(10):
 		for row in range(2):
 			var stripe_color := CREAM if (index + row) % 2 == 0 else INK
-			_visual_box(parent, Vector3(-25.5 + index, ROAD_HEIGHT + 0.005, 19.0 + row * 0.45),
+			_visual_box(parent, Vector3(WEST_X - 4.5 + index, ROAD_HEIGHT + 0.005, 31.0 + row * 0.45),
 				Vector3(1.0, 0.008, 0.45), stripe_color)
-	for z in [22.0, 24.0, 26.0]:
-		_visual_box(parent, Vector3(-22.0, ROAD_HEIGHT + 0.005, z), Vector3(2.2, 0.008, 0.08), CREAM)
+	for z in [34.0, 36.0, 38.0]:
+		_visual_box(parent, Vector3(WEST_X, ROAD_HEIGHT + 0.005, z), Vector3(2.2, 0.008, 0.08), CREAM)
 
 
 static func _build_scenery(parent: Node3D) -> void:
@@ -285,7 +342,7 @@ static func _build_scenery(parent: Node3D) -> void:
 	crown_mesh.height = 5.4
 	crown_mesh.radial_segments = 7
 	crown_mesh.material = _material(Color(0.12, 0.22, 0.13))
-	var trees := 100
+	var trees := 145
 	var trunks := MultiMesh.new()
 	trunks.transform_format = MultiMesh.TRANSFORM_3D
 	trunks.mesh = trunk_mesh
@@ -296,7 +353,7 @@ static func _build_scenery(parent: Node3D) -> void:
 	crowns.instance_count = trees
 	for index in range(trees):
 		var angle := float(index) / trees * TAU + rng.randf_range(-0.04, 0.04)
-		var radius := rng.randf_range(65.0, 96.0)
+		var radius := rng.randf_range(108.0, 143.0)
 		var location := Vector3(cos(angle) * radius, GROUND_HEIGHT, sin(angle) * radius)
 		var scale := rng.randf_range(0.7, 1.45)
 		var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3.ONE * scale)
@@ -309,21 +366,21 @@ static func _build_scenery(parent: Node3D) -> void:
 		parent.add_child(node)
 	for index in range(11):
 		var angle := float(index) / 11.0 * TAU
-		var position := Vector3(cos(angle) * 137.0, -4.0, sin(angle) * 127.0)
-		_mountain(parent, position, rng.randf_range(27.0, 48.0), rng.randf_range(18.0, 32.0), index)
+		var position := Vector3(cos(angle) * 188.0, -4.0, sin(angle) * 174.0)
+		_mountain(parent, position, rng.randf_range(32.0, 60.0), rng.randf_range(22.0, 38.0), index)
 	# Soft-boundary stake/ribbon fence is scenery, away from the usable shoulder.
 	for side in [-1.0, 1.0]:
-		for index in range(12):
-			var z := -48.0 + index * 9.0
-			var x := -34.0 if side < 0.0 else 49.0
+		for index in range(18):
+			var z := -77.0 + index * 9.0
+			var x := -99.0 if side < 0.0 else 83.0
 			_pole(parent, Vector3(x, GROUND_HEIGHT, z), 0.8, CREAM)
-			if index < 11:
+			if index < 17:
 				_visual_box(parent, Vector3(x, 0.4, z + 4.5), Vector3(0.035, 0.08, 9.0), ORANGE)
-	_visual_box(parent, Vector3(0.0, 2.0, -56.12), Vector3(16.0, 3.0, 0.1), INK)
+	_visual_box(parent, Vector3(0.0, 2.0, -82.12), Vector3(18.0, 3.0, 0.1), INK)
 	for sign in [-1.0, 1.0]:
-		_pole(parent, Vector3(sign * 6.0, 0.0, -56.15), 3.4, INK)
-	_label(parent, "DIRTLINE", Vector3(0.0, 2.55, -56.0), 0.0, 110, ORANGE)
-	_label(parent, "MOTOCROSS PROVING GROUND", Vector3(0.0, 1.45, -56.0), 0.0, 30, CREAM)
+		_pole(parent, Vector3(sign * 7.0, 0.0, -82.15), 3.4, INK)
+	_label(parent, "DIRTLINE", Vector3(0.0, 2.55, -82.0), 0.0, 110, ORANGE)
+	_label(parent, "MOTOCROSS PROVING GROUND", Vector3(0.0, 1.45, -82.0), 0.0, 30, CREAM)
 
 
 static func _mountain(parent: Node3D, location: Vector3, radius: float, height: float, index: int) -> void:
@@ -355,13 +412,13 @@ static func _gate(parent: Node3D, index: int, position: Vector3, direction: Vect
 	root.transform = transform
 	parent.add_child(root)
 	for sign in [-1.0, 1.0]:
-		_pole(root, Vector3(sign * 4.9, 0.0, 0.0), 3.95 if index == 0 else 2.5, ORANGE if index == 0 else CREAM)
-		_visual_box(root, Vector3(sign * 4.9, 1.85, 0.0), Vector3(0.42, 0.65, 0.08), INK)
-		_label(root, "%02d" % (index + 1), Vector3(sign * 4.9, 1.88, 0.07), 0.0, 30, CREAM)
+		_pole(root, Vector3(sign * 6.1, 0.0, 0.0), 3.95 if index == 0 else 2.5, ORANGE if index == 0 else CREAM)
+		_visual_box(root, Vector3(sign * 6.1, 1.85, 0.0), Vector3(0.42, 0.65, 0.08), INK)
+		_label(root, "%02d" % (index + 1), Vector3(sign * 6.1, 1.88, 0.07), 0.0, 30, CREAM)
 	if index == 0:
-		_visual_box(root, Vector3(0.0, 3.6, 0.0), Vector3(10.1, 0.7, 0.1), INK)
+		_visual_box(root, Vector3(0.0, 3.6, 0.0), Vector3(12.5, 0.7, 0.1), INK)
 		_label(root, "DIRTLINE  /  START + FINISH", Vector3(0.0, 3.65, 0.07), 0.0, 38, CREAM)
-	return {"transform": transform, "width": 8.0, "name": title}
+	return {"transform": transform, "width": 10.0, "name": title}
 
 
 static func _station(parent: Node3D, title: String, detail: String, position: Vector3, yaw: float) -> Dictionary:
@@ -392,7 +449,14 @@ static func _triangle(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, sur
 		var variation := sin(vertex.x * 1.7 + vertex.z * 0.63) * 0.035
 		color = color.lightened(variation) if variation > 0.0 else color.darkened(-variation)
 		if absf(float(laterals[index])) > ROAD_HALF_WIDTH:
-			color = color.lerp(GRASS, _smoothstep(4.0, 6.0, absf(float(laterals[index]))))
+			color = color.lerp(GRASS, _smoothstep(ROAD_HALF_WIDTH,
+				ROAD_HALF_WIDTH + SHOULDER_WIDTH, absf(float(laterals[index]))))
+		elif surface == "hardpack" and vertex.x < -40.9:
+			# The practice ground's shoulder has the same natural soil-to-grass
+			# transition as the loop, while its central riding line stays level.
+			color = color.lerp(GRASS, 1.0 - _smoothstep(GROUND_HEIGHT, ROAD_HEIGHT, vertex.y))
+		elif surface == "dirt" and absf(float(laterals[index])) < 2.0:
+			color = color.darkened(0.04)
 		tool.set_color(color)
 		tool.add_vertex(vertex)
 

@@ -7,6 +7,8 @@ bash "$project_dir/tools/export.sh" windows
 python3 - "$project_dir" "$repo_dir/downloads" <<'PY'
 import hashlib
 import pathlib
+import re
+import shutil
 import sys
 import zipfile
 
@@ -33,6 +35,13 @@ with zipfile.ZipFile(archive) as package:
 if archive.stat().st_size >= 100 * 1024 * 1024:
     raise SystemExit('Release exceeds normal GitHub file size; use release assets')
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-(downloads / 'SHA256SUMS').write_text(f'{digest}  DirtlineMX-Windows.zip\n')
+version = re.search(r'^config/version="([0-9]+\.[0-9]+\.[0-9]+)"$',
+                    (project / 'project.godot').read_text(), re.MULTILINE)
+if version is None:
+    raise SystemExit('Missing semantic release version in project.godot')
+versioned = downloads / f'DirtlineMX-Windows-v{version.group(1)}.zip'
+shutil.copyfile(archive, versioned)
+(downloads / 'SHA256SUMS').write_text(
+    f'{digest}  {archive.name}\n{digest}  {versioned.name}\n')
 print(f'Windows package verified: {archive.stat().st_size:,} bytes; SHA-256 {digest}')
 PY
