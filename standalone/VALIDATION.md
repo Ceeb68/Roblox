@@ -14,6 +14,8 @@ Controller analog polling was tested through binding/routing mathematics; actual
 
 ## Automated workflow
 
+Version 0.2.1 adds 67 actual native recovery checks: genuine crash detection, one-second auto remount (paused menus freeze the timer), immediate R and mapped controller recovery, physical/visible rider pose, all body velocities, held-control protection, nearby ground/fallback, repeated crashes and reset-failure propagation. Invalid nonfinite poses are rejected without partial state changes. Chassis-only contact can record a fall even when both wheels are clear. Physics bodies apply remount poses inside their next native integration callback, and presentation/COM/inertia/collision reset immediately.
+
 Run `bash standalone/tools/check.sh`. Preserve command failures and engine error output. Export and package only the current passing revision with `bash standalone/tools/package_windows.sh`. The package verifies every shipped file against the current export and records its SHA-256 in `downloads/SHA256SUMS`.
 
 The SI math suite contains 43 regression cases and 1,610 checks for drivetrain momentum/energy, clutch/manual gears, losses, brakes, surface grip, the shared traction budget, tire relaxation, suspension damping and a one-dimensional hard-landing convergence scenario. These run the mathematical modules rather than a mock engine.
@@ -48,7 +50,7 @@ Record the build hash, PC/controller, setup, inputs, speed, suspension compressi
 | Large jump | Repeatable flight, meaningful pitch/roll inputs, believable nose-heavy/sideways/over-rotated consequences |
 | Grip pads | Wheelspin, slides, braking and washouts vary consistently on hardpack, sand, mud and loam |
 | Wheelies and loop-outs | Rear wheel keeps real support at extreme pitch; balance and throttle determine outcome |
-| Crash and recovery | Actual body motion causes the fall; no forced landing; 2.5-second delay and manual recovery |
+| Crash and recovery | Actual body motion causes the fall; one-second automatic remount; immediate manual remount; complete rider reset and held-input protection |
 | Performance | Measure 240 Hz workload on representative Windows PCs; expose/record overload rather than silently changing competitive rules |
 
 Phase 1 remains open until a rider can handle every required obstacle convincingly and the recorded failures are resolved. The current lab, procedural visuals and tests form a development baseline, not a production simulator qualification. No exact MX Bikes physics replication is claimed.

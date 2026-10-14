@@ -14,6 +14,8 @@ var standing: bool = false
 var foot_down: bool = true
 var controller_id: int = -1
 var controller_active: bool = false
+var _blocked_keys: Dictionary = {}
+var _blocked_pad: Dictionary = {}
 
 func _init() -> void:
 	Input.joy_connection_changed.connect(_controller_connection_changed)
@@ -46,6 +48,20 @@ func select_controller(device: int) -> void:
 	controller_active = device >= 0
 
 func note_event(event: InputEvent) -> void:
+	# Release/recenter rearms only that input; held controls remain blocked.
+	for action: StringName in _blocked_keys.keys():
+		if event.is_action_released(action):
+			_blocked_keys.erase(action)
+	if event.device == controller_id:
+		for action: String in _blocked_pad.keys():
+			var binding: Dictionary = controller_bindings.bindings.get(action, {})
+			if event is InputEventJoypadButton and str(binding.get("kind", "")) == "button":
+				if (event as InputEventJoypadButton).button_index == int(binding.index) and not event.is_pressed():
+					_blocked_pad.erase(action)
+			elif event is InputEventJoypadMotion and str(binding.get("kind", "")) == "axis":
+				var motion := event as InputEventJoypadMotion
+				if motion.axis == int(binding.index) and float(controller_bindings.axis_strength(motion.axis_value, binding)) <= 0.05:
+					_blocked_pad.erase(action)
 	if event is InputEventJoypadMotion or event is InputEventJoypadButton:
 		if controller_id < 0:
 			controller_id = event.device
@@ -67,6 +83,8 @@ func command(event: InputEvent) -> String:
 				break
 	elif event is InputEventJoypadButton or event is InputEventJoypadMotion:
 		action = str(controller_bindings.action_for_event(event, controller_id))
+	if (event is InputEventKey and _blocked_keys.has("mx_" + action)) or ((event is InputEventJoypadButton or event is InputEventJoypadMotion) and _blocked_pad.has(action)):
+		return ""
 	return action
 
 func apply_command(action: String) -> void:
@@ -85,10 +103,10 @@ func tick(delta: float, enabled: bool) -> Dictionary:
 		release_controls()
 		return packet()
 	if controller_active:
-		throttle = float(controller_bindings.strength("throttle", controller_id))
-		front_brake = float(controller_bindings.strength("front_brake", controller_id))
-		rear_brake = move_toward(rear_brake, float(controller_bindings.strength("rear_brake", controller_id)), delta * 5.0)
-		var lever: float = float(controller_bindings.strength("clutch", controller_id))
+		throttle = _pad_strength("throttle")
+		front_brake = _pad_strength("front_brake")
+		rear_brake = move_toward(rear_brake, _pad_strength("rear_brake"), delta * 5.0)
+		var lever: float = _pad_strength("clutch")
 		var binding: Dictionary = controller_bindings.bindings.get("clutch", {})
 		clutch = lever if str(binding.get("kind", "")) == "axis" else move_toward(clutch, lever, delta * (12.0 if lever > clutch else (1.0 / 0.6)))
 		steer = _controller_pair("steer_left", "steer_right")
@@ -96,23 +114,23 @@ func tick(delta: float, enabled: bool) -> Dictionary:
 		body_forward = _controller_pair("body_back", "body_forward")
 		body_side = _controller_pair("body_left", "body_right")
 	else:
-		throttle = move_toward(throttle, 1.0 if Input.is_action_pressed("mx_throttle") else 0.0, delta * (1.25 if Input.is_action_pressed("mx_throttle") else 5.0))
-		front_brake = move_toward(front_brake, 1.0 if Input.is_action_pressed("mx_front_brake") else 0.0, delta * (2.5 if Input.is_action_pressed("mx_front_brake") else 7.0))
-		rear_brake = move_toward(rear_brake, 1.0 if Input.is_action_pressed("mx_rear_brake") else 0.0, delta * 4.0)
-		if Input.is_action_pressed("mx_clutch_quick"):
+		throttle = move_toward(throttle, 1.0 if _key_down("mx_throttle") else 0.0, delta * (1.25 if _key_down("mx_throttle") else 5.0))
+		front_brake = move_toward(front_brake, 1.0 if _key_down("mx_front_brake") else 0.0, delta * (2.5 if _key_down("mx_front_brake") else 7.0))
+		rear_brake = move_toward(rear_brake, 1.0 if _key_down("mx_rear_brake") else 0.0, delta * 4.0)
+		if _key_down("mx_clutch_quick"):
 			clutch = 1.0
-		elif Input.is_action_pressed("mx_clutch_pull"):
+		elif _key_down("mx_clutch_pull"):
 			clutch = move_toward(clutch, 1.0, delta * 3.0)
-		elif Input.is_action_pressed("mx_clutch_release"):
+		elif _key_down("mx_clutch_release"):
 			clutch = move_toward(clutch, 0.0, delta * 0.625)
-		steer = move_toward(steer, Input.get_axis("mx_steer_left", "mx_steer_right"), delta * 3.5)
-		lean = move_toward(lean, Input.get_axis("mx_lean_left", "mx_lean_right"), delta * 3.0)
-		body_forward = move_toward(body_forward, Input.get_axis("mx_body_back", "mx_body_forward"), delta * 3.0)
-		body_side = move_toward(body_side, Input.get_axis("mx_body_left", "mx_body_right"), delta * 3.0)
+		steer = move_toward(steer, _key_axis("mx_steer_left", "mx_steer_right"), delta * 3.5)
+		lean = move_toward(lean, _key_axis("mx_lean_left", "mx_lean_right"), delta * 3.0)
+		body_forward = move_toward(body_forward, _key_axis("mx_body_back", "mx_body_forward"), delta * 3.0)
+		body_side = move_toward(body_side, _key_axis("mx_body_left", "mx_body_right"), delta * 3.0)
 	return packet()
 
 func _controller_pair(negative: String, positive: String) -> float:
-	return float(controller_bindings.strength(positive, controller_id)) - float(controller_bindings.strength(negative, controller_id))
+	return _pad_strength(positive) - _pad_strength(negative)
 
 func release_controls() -> void:
 	throttle = 0.0
@@ -138,3 +156,37 @@ func _controller_connection_changed(device: int, connected: bool) -> void:
 	elif connected and controller_id < 0:
 		controller_id = device
 		controller_active = false
+
+func reset_for_recovery() -> void:
+	release_controls()
+	standing = false
+	foot_down = true
+	_blocked_keys.clear()
+	_blocked_pad.clear()
+	for action: StringName in InputMap.get_actions():
+		if String(action).begins_with("mx_") and Input.is_action_pressed(action):
+			_blocked_keys[action] = true
+	if controller_id >= 0:
+		for action: String in controller_bindings.ACTIONS:
+			if float(controller_bindings.strength(action, controller_id)) > 0.05:
+				_blocked_pad[action] = true
+	controller_bindings.reset_edges()
+
+func _key_down(action: StringName) -> bool:
+	var pressed := Input.is_action_pressed(action)
+	if _blocked_keys.has(action):
+		if pressed:
+			return false
+		_blocked_keys.erase(action)
+	return pressed
+
+func _key_axis(negative: StringName, positive: StringName) -> float:
+	return float(_key_down(positive)) - float(_key_down(negative))
+
+func _pad_strength(action: String) -> float:
+	var value: float = float(controller_bindings.strength(action, controller_id))
+	if _blocked_pad.has(action):
+		if value > 0.05:
+			return 0.0
+		_blocked_pad.erase(action)
+	return value

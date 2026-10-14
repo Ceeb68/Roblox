@@ -27,7 +27,7 @@ The bike starts in neutral, clutch pulled, feet down. Select first with **E**, b
 | Pause | Escape | Start |
 | Chase / first-person camera | M | B / Circle |
 
-Feet are manually deployed physical colliders; leaving them down can contact and drag on the terrain. Recovery is manual after a 2.5-second crash delay. It resets the bike to the lab spawn and invalidates the current lap. Session lap timing requires ordered gates; this build does not save records or provide online races.
+Feet are manually deployed physical colliders; leaving them down can contact and drag on the terrain. Version 0.2.1 automatically remounts bike and rider after one unpaused second of crashing. R / mapped recover remounts immediately. Recovery prefers nearby safe ground, falls back to the lab spawn and invalidates the current lap. It restores all four bodies, native velocity, rider COM/inertia/collision and visible pose to a seated, neutral, feet-down state. Held inputs remain suppressed individually until released/recentered. Session timing requires ordered gates; this build does not save records or provide online races.
 
 Default **Lean control · virtual rider** uses your primary input as a desired lean. A finite human model countersteers and steers into a developing fall through the physical fork bearing; it can follow a neutral line without assigning chassis roll, yaw or position. Steering authority, available traction and suspension still limit the outcome. **Direct handlebar control · manual** remains selectable in Settings. Real upper-body movement remains separate and influences COM, reaction and the rider's visible pose. Slides can recover before the actual bike departs; traction loss alone no longer immediately shuts down the rider.
 

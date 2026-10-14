@@ -70,6 +70,8 @@ func _new_bike(position_value: Vector3 = Vector3(0.0, 0.82, 0.0), basis_value: B
 	bike.reset_bike(Transform3D(basis_value, position_value))
 	bike.set_controls({"clutch": 1.0, "footDown": true})
 	await _next_tick()
+	# Commit all queued native remount poses before benches prescribe spin.
+	await _next_tick()
 
 func _native_bodies(node: Node) -> Array[RigidBody3D]:
 	var result: Array[RigidBody3D] = []

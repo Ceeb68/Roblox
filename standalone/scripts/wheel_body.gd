@@ -18,6 +18,20 @@ var surface: String = "dirt"
 var native_contact_count: int = 0
 var contact_impulse: Vector3 = Vector3.ZERO
 var last_contact_transform: Transform3D = Transform3D.IDENTITY
+var _recovery_pose: Variant = null
+
+func queue_reset(pose: Transform3D) -> void:
+	global_transform = pose
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	sleeping = false
+	clear_contact()
+	contact_position = Vector3.ZERO
+	contact_normal = Vector3.UP
+	ground_velocity = Vector3.ZERO
+	surface = "dirt"
+	last_contact_transform = pose
+	_recovery_pose = pose
 
 func clear_contact() -> void:
 	contact = false
@@ -26,6 +40,14 @@ func clear_contact() -> void:
 	contact_impulse = Vector3.ZERO
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	if _recovery_pose != null:
+		state.transform = _recovery_pose
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
+		last_contact_transform = state.transform
+		_recovery_pose = null
+		clear_contact()
+		return
 	# Jolt's Godot adapter does not integrate free-body gyroscopic precession.
 	# Complete Euler dynamics for this actual body's native inertia once;
 	# this is neither a second virtual wheel nor an orientation controller.

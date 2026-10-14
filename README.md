@@ -6,12 +6,14 @@ A standalone Windows motocross simulation prototype, built with Godot 4.6.3 and 
 
 ## Play on Windows
 
-1. [Download Dirtline MX v0.2 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.2.0.zip).
+1. [Download Dirtline MX v0.2.1 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.2.1.zip).
 2. Right-click the ZIP and choose **Extract All**.
 3. Open the extracted folder and double-click **DirtlineMX.exe**. Keep its `.pck` file beside it.
 4. The bike starts in neutral with the clutch pulled and feet down. Press **E** for first, hold **W** to build revs, then hold **B** to release the clutch gradually. Raise your feet with **F** once moving.
 
 Use **A/D** or the left stick to request bike lean; the virtual rider countersteers through the handlebars. **Z/X** moves the rider's upper body. Use **M / controller B** for first-person helmet view, **H** for help and **U** for suspension setup. Open **Escape / Start → Settings + controller binds → Controller bindings** to customize buttons, axes, inversion and deadzones. Preferences are saved on your computer. No Roblox installation or game editor is needed to play.
+
+After a crash, bike and rider remount automatically after **one second** near the crash site. **R / controller Y** remounts immediately. Recovery resets the rider's physical and visible pose, selects neutral, plants feet and clears movement; release any held controls before using them again. Unsafe ground falls back to the lab spawn.
 
 ## First prototype
 

@@ -41,6 +41,8 @@ var best_lap: float = 0.0
 var lap_count: int = 0
 var next_gate: int = 0
 var was_crashed: bool = false
+var recovery_count: int = 0
+var last_recovery_kind: String = ""
 var notification: String = ""
 var notification_time: float = 0.0
 var camera_yaw: float = 0.0
@@ -170,6 +172,9 @@ func _physics_process(delta: float) -> void:
 	if crashed and not was_crashed:
 		_invalidate_lap("Crash — lap invalidated")
 	was_crashed = crashed
+	if crashed and float(telemetry.get("recoveryRemaining", 0.0)) <= 0.0:
+		_recover(true)
+		return
 	if lap_active:
 		lap_elapsed += delta
 	var position_now: Vector3 = _chassis().global_position
@@ -298,22 +303,74 @@ func _resume() -> void:
 	get_viewport().gui_release_focus()
 	previous_position = _chassis().global_position
 
-func _recover() -> void:
+func _recover(automatic: bool = false) -> bool:
+	if bike == null:
+		return false
 	var telemetry: Dictionary = bike.get_telemetry()
 	var remaining: float = float(telemetry.get("recoveryRemaining", 0.0))
-	if bool(telemetry.get("crashed", false)) and remaining > 0.0:
-		_notice("Recovery available in %.1f s" % remaining, 2.0)
-		return
+	if automatic and (not bool(telemetry.get("crashed", false)) or remaining > 0.0):
+		return false
+	# Manual R can remount immediately. Automatic recovery waits one second.
+	# Check the physics reset before changing any rider/UI bookkeeping.
+	if not bike.reset_bike(_recovery_transform(), not automatic):
+		return false
 	_invalidate_lap("Recovery — cross START to begin a fresh lap")
-	rider_input.release_controls()
-	# Explicit remount places the rider seated, with feet supporting the stopped bike.
-	rider_input.foot_down = true
-	rider_input.standing = false
-	bike.reset_bike(track.get("spawn", Transform3D.IDENTITY))
+	rider_input.reset_for_recovery()
 	bike.set_controls(rider_input.packet())
 	previous_position = _chassis().global_position
 	was_crashed = false
+	recovery_count += 1
+	last_recovery_kind = "automatic" if automatic else "manual"
 	camera_snap = true
+	_notice("Back on the bike · release held controls, then select first gear", 4.0)
+	return true
+
+func _recovery_transform() -> Transform3D:
+	var fallback: Transform3D = track.get("spawn", Transform3D.IDENTITY)
+	var position_now: Vector3 = _chassis().global_position
+	if not position_now.is_finite():
+		return fallback
+	var forward: Vector3 = -_chassis().global_basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.001:
+		forward = -fallback.basis.z
+	forward = forward.normalized()
+	var right: Vector3 = forward.cross(Vector3.UP).normalized()
+	# Prefer the crash site, then nearby flat ground; otherwise use the lab.
+	for offset: Vector3 in [Vector3.ZERO, right * 3.0, -right * 3.0, forward * 3.0, -forward * 3.0]:
+		var point := position_now + offset
+		var hit := _recovery_ground(point)
+		if hit.is_empty():
+			continue
+		var normal: Vector3 = hit.normal
+		var tangent: Vector3 = forward - normal * forward.dot(normal)
+		if tangent.length_squared() < 0.001:
+			continue
+		var basis := Basis.looking_at(tangent.normalized(), normal)
+		var ground: Vector3 = hit.position
+		var extra_height := 0.0
+		var safe := true
+		for probe: Vector3 in [basis * Vector3(0, 0, -0.74), basis * Vector3(0, 0, 0.74), basis * Vector3(0.34, 0, 0), basis * Vector3(-0.34, 0, 0)]:
+			var support := _recovery_ground(ground + probe)
+			if support.is_empty():
+				safe = false
+				break
+			var plane_height := ground.y - normal.dot(Vector3(probe.x, 0, probe.z)) / normal.y
+			var difference: float = float(support.position.y) - plane_height
+			if absf(difference) > 0.35:
+				safe = false
+				break
+			extra_height = maxf(extra_height, difference)
+		if safe:
+			return Transform3D(basis, ground + normal * 0.86 + Vector3.UP * extra_height)
+	return fallback
+
+func _recovery_ground(point: Vector3) -> Dictionary:
+	var query := PhysicsRayQueryParameters3D.create(point + Vector3.UP * 6.0, point - Vector3.UP * 12.0, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty() or (hit.normal as Vector3).dot(Vector3.UP) < 0.8:
+		return {}
+	return hit
 
 func _check_gates(from: Vector3, to: Vector3) -> void:
 	var gates: Array = track.get("gates", [])
@@ -590,7 +647,7 @@ func _update_hud(t: Dictionary) -> void:
 	var status: String = notification if notification_time > 0.0 else ""
 	if bool(t.get("crashed", false)):
 		var wait: float = float(t.get("recoveryRemaining", 0.0))
-		status = "%s · %s" % [str(t.get("crashReason", "Crash")), "R / mapped button: recover" if wait <= 0.0 else "recover in %.1f s" % wait]
+		status = "%s · Auto remount in %.1f s · R / mapped button: remount now" % [str(t.get("crashReason", "Crash")), wait]
 	elif bool(t.get("stalled", false)):
 		status = "ENGINE STALLED · Pull clutch / select neutral, then T or left-stick click"
 	(labels.status as Label).text = status

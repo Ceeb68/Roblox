@@ -14,7 +14,20 @@ const BikeVisual = preload("res://scripts/bike_visual.gd")
 class NativeBody:
 	extends RigidBody3D
 	const Gyro = preload("res://physics/gyroscope.gd")
+	var _recovery_pose: Variant = null
+	func queue_reset(pose: Transform3D) -> void:
+		global_transform = pose
+		linear_velocity = Vector3.ZERO
+		angular_velocity = Vector3.ZERO
+		sleeping = false
+		_recovery_pose = pose
 	func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+		if _recovery_pose != null:
+			state.transform = _recovery_pose
+			state.linear_velocity = Vector3.ZERO
+			state.angular_velocity = Vector3.ZERO
+			_recovery_pose = null
+			return
 		Gyro.integrate(state)
 const FRONT_AXLE := Vector3(0.0, -0.44, -0.74)
 const REAR_AXLE := Vector3(0.0, -0.44, 0.74)
@@ -259,31 +272,37 @@ func _reset_models() -> void:
 	_rider_pitch_rate = 0
 	_rider_roll_rate = 0
 	_air_time = 0
+	_last_air_velocity = Vector3.ZERO
 	_last_rear_slide = false
 	_steering_integral = 0.0
+	_heading_correction = 0.0
+	_rider_steering_torque = 0.0
+	_rider_target_lean = 0.0
+	_steering_target = 0.0
 	crashed = false
 	crash_reason = ""
 	_crash_elapsed = 0
 	controls = _neutral_controls()
 
-func reset_bike(spawn: Transform3D) -> bool:
-	if not _built or (crashed and _crash_elapsed < float(config.Crash.RecoveryDelay)):
+func reset_bike(spawn: Transform3D, force_recovery: bool = false) -> bool:
+	if not _built or not spawn.origin.is_finite() or not spawn.basis.is_finite() or absf(spawn.basis.determinant()) < 0.000001:
+		return false
+	if crashed and not force_recovery and _crash_elapsed < float(config.Crash.RecoveryDelay):
 		return false
 	_reset_models()
 	_rider_heading = -spawn.basis.z
 	_rider_line_origin = spawn.origin
-	# Explicit rider recovery/spawn is the sole transform/velocity reset path.
-	# Normal riding and crashes never replace native motion with target poses.
+	# Spawning/remounting is the sole pose reset path. Riding and the crash
+	# itself remain native motion; automatic recovery starts after its delay.
 	var bodies: Array[RigidBody3D] = [chassis, fork, front_wheel, rear_wheel]
 	var positions: Array[Vector3] = [Vector3.ZERO, HEAD, FRONT_AXLE, REAR_AXLE]
 	for i in range(bodies.size()):
-		bodies[i].global_transform = spawn * Transform3D(Basis.IDENTITY, positions[i])
-		bodies[i].linear_velocity = Vector3.ZERO
-		bodies[i].angular_velocity = Vector3.ZERO
-		bodies[i].sleeping = false
+		bodies[i].call("queue_reset", spawn * Transform3D(Basis.IDENTITY, positions[i]))
 	front_wheel.clear_contact()
 	rear_wheel.clear_contact()
 	_update_feet()
+	_apply_rider_pose()
+	_update_visuals()
 	_reset_pending = true
 	return true
 
@@ -557,6 +576,10 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 	chassis.apply_torque(chassis.global_basis.x * pitch_reaction + chassis.global_basis.z * roll_reaction)
 	_rider_pitch_rate = pitch_motion.y
 	_rider_roll_rate = roll_motion.y
+	_apply_rider_pose()
+
+func _apply_rider_pose() -> void:
+	var rider: Dictionary = config.Rider
 	var rider_position := Vector3(
 		_body_side * float(rider.SideTravel) + sin(_body_lean * float(rider.MaxRoll)) * 0.26,
 		0.54 + _standing * float(rider.StandingHeight),
@@ -614,7 +637,9 @@ func _angles() -> Vector2:
 	return Vector2(atan2(-right.y, up.y), asin(clampf(forward.y, -1.0, 1.0)))
 
 func _detect_crash(dt: float) -> void:
-	var grounded := front_wheel.contact or rear_wheel.contact
+	# A fallen bike can rest entirely on the chassis/rider, with both tires
+	# clear of the ground. Such a fall must still start the recovery timer.
+	var grounded := front_wheel.contact or rear_wheel.contact or chassis.get_contact_count() > 0 or fork.get_contact_count() > 0
 	var angles := _angles()
 	var speed := chassis.linear_velocity.length()
 	if not grounded:
@@ -622,7 +647,7 @@ func _detect_crash(dt: float) -> void:
 		_last_air_velocity = chassis.linear_velocity
 	else:
 		if not crashed and _air_time > 0.10:
-			var normal := front_wheel.contact_normal if front_wheel.contact else rear_wheel.contact_normal
+			var normal := front_wheel.contact_normal if front_wheel.contact else (rear_wheel.contact_normal if rear_wheel.contact else Vector3.UP)
 			var impact_speed := maxf(0, -_last_air_velocity.dot(normal))
 			var landing_tilt := acos(clampf(chassis.global_basis.y.dot(normal), -1, 1))
 			var side_speed := absf(_last_air_velocity.dot(chassis.global_basis.x))

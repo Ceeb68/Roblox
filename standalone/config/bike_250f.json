@@ -5,7 +5,7 @@
     "LandingAngle": 0.6632251157578453,
     "LandingSpeed": 7.5,
     "LoopPitch": 1.4311699866353502,
-    "RecoveryDelay": 2.5,
+    "RecoveryDelay": 1.0,
     "SideLandingSpeed": 6
   },
   "Drive": {

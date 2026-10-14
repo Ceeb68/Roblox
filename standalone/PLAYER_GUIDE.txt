@@ -1,4 +1,4 @@
-DIRTLINE MX / WINDOWS PC / 0.2.0
+DIRTLINE MX / WINDOWS PC / 0.2.1
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
@@ -21,7 +21,7 @@ A / D = requested bike lean in default mode; Z / X = upper-body lean
 In manual handlebar mode A / D applies steering effort directly.
 I / K = rider forward / back; J / L = rider left / right
 C = standing / seated; F = feet down / up
-R = manual recovery (after crash cooldown); T = engine starter
+R = remount immediately; T = engine starter
 H = controls; U = parked suspension setup; Escape = pause
 M = switch between chase view and first-person helmet view
 Hold right mouse = orbit camera; mouse wheel = camera distance
@@ -48,6 +48,10 @@ the handlebars. It does not lock the bike upright or correct its landing.
 Manual handlebar mode is available in Settings for direct steering effort.
 Use your feet at a stop and raise them once moving. Slides remain recoverable
 until the actual bike loses balance; excess speed, lean and bad landings crash.
+After a crash, the bike and rider remount automatically after one second.
+R / controller Y remounts immediately. Recovery restores seated posture,
+feet down, neutral and cleared movement near the crash; unsafe ground uses
+the lab spawn. Release held controls, then use them again to ride.
 Press M / controller B for helmet view; adjust field of view in Settings.
 Chase view is closer, and the geared rider/bike have a larger screen presence.
 
