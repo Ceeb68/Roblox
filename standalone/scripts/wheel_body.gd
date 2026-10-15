@@ -21,6 +21,19 @@ var reported_normal_load: float = 0.0
 var estimated_manifold_count: int = 0
 var support_patch_count: int = 0
 var contact_position: Vector3 = Vector3.ZERO
+## Jolt's cached world contact belongs to the preceding collision geometry,
+## while its callback transform is the solved hub pose. At 18 m/s and 240 Hz,
+## combining those phases leaves a false 75 mm trailing tire-force lever.
+## Transport the pressure patch by measured hub translation for next-step
+## tangential forces. Keep the raw contact and native normal support untouched.
+## A pressure patch is not a rotating material tread point: do not spin it
+## around the axle when transporting the completed step's geometry.
+var tire_contact_position: Vector3 = Vector3.ZERO
+var tire_patch_translation: Vector3 = Vector3.ZERO
+var tire_patch_phase_valid: bool = false
+var _tire_previous_origin: Vector3 = Vector3.ZERO
+var _tire_previous_frame: int = -1
+var _tire_history_valid: bool = false
 var contact_normal: Vector3 = Vector3.UP
 var ground_velocity: Vector3 = Vector3.ZERO
 var surface: String = "dirt"
@@ -76,6 +89,7 @@ func clear_contact() -> void:
 	support_patch_count = 0
 	native_contact_count = 0
 	contact_impulse = Vector3.ZERO
+	tire_contact_position = Vector3.ZERO
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if _recovery_pose != null:
@@ -85,6 +99,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		last_contact_transform = state.transform
 		_recovery_pose = null
 		clear_contact()
+		_sample_tire_patch_pose(state.transform.origin)
 		_observe_solved_load(state, true)
 		return
 	# Jolt's Godot adapter does not integrate free-body gyroscopic precession.
@@ -92,6 +107,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# this is neither a second virtual wheel nor an orientation controller.
 	Gyro.integrate(state)
 	clear_contact()
+	_sample_tire_patch_pose(state.transform.origin)
 	last_contact_transform = state.transform
 	var samples: Array[Dictionary] = []
 	for i in range(state.get_contact_count()):
@@ -116,6 +132,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		var support := reduce_contact_samples(samples, state.step)
 		normal_load = float(support.normalLoad)
 		contact_position = support.position
+		tire_contact_position = contact_position + tire_patch_translation
 		contact_normal = support.normal
 		ground_velocity = support.velocity
 		surface = str(support.surface)
@@ -242,6 +259,22 @@ func invalidate_load_history() -> void:
 	velocity_sample_valid = false
 	callback_stamp = -1
 	momentum_load_raw = 0.0
+	# A prescribed pose/velocity starts a new contact phase too. Missing or
+	# skipped native samples use raw geometry rather than a guessed velocity
+	# offset or a displacement crossing a remount/teleport.
+	_tire_history_valid = false
+	_tire_previous_frame = -1
+	tire_patch_translation = Vector3.ZERO
+	tire_patch_phase_valid = false
+	tire_contact_position = contact_position if contact else Vector3.ZERO
+
+func _sample_tire_patch_pose(origin: Vector3) -> void:
+	var frame := Engine.get_physics_frames()
+	tire_patch_phase_valid = _tire_history_valid and frame == _tire_previous_frame + 1 and origin.is_finite()
+	tire_patch_translation = origin - _tire_previous_origin if tire_patch_phase_valid else Vector3.ZERO
+	_tire_previous_origin = origin
+	_tire_previous_frame = frame
+	_tire_history_valid = origin.is_finite()
 
 func _observe_solved_load(state: PhysicsDirectBodyState3D, resetting: bool = false) -> void:
 	var native_velocity := state.linear_velocity

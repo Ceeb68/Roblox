@@ -4,6 +4,7 @@ extends Node3D
 const TrackBuilder = preload("res://scripts/track_builder.gd")
 const BikeScript = preload("res://scripts/bike_controller.gd")
 const RiderInput = preload("res://scripts/rider_input.gd")
+const HandlingSetup = preload("res://physics/handling_setup.gd")
 const INK: Color = Color("101a29")
 const PANEL: Color = Color("182638")
 const ORANGE: Color = Color("ff9854")
@@ -29,6 +30,8 @@ var focused: bool = true
 var labels: Dictionary = {}
 var bars: Dictionary = {}
 var tuning_fields: Dictionary = {}
+var handling_fields: Dictionary = {}
+var handling_status: Label
 var audio_enabled: bool = true
 var shadows_enabled: bool = true
 var resolution_scale: float = 1.0
@@ -78,13 +81,15 @@ func _ready() -> void:
 		return
 	cfg = parsed as Dictionary
 	setup_values = (cfg.get("Suspension", {}) as Dictionary).duplicate(true)
+	var saved_handling := HandlingSetup.load_file("user://handling.cfg", cfg)
+	var runtime_config: Dictionary = saved_handling.config if bool(saved_handling.ok) else cfg
 	_build_world_environment()
 	track = TrackBuilder.build(self)
 	bike = BikeScript.new()
 	bike.name = "TestBike250F"
 	bike.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(bike)
-	bike.configure(cfg)
+	bike.configure(runtime_config)
 	bike.reset_bike(track.get("spawn", Transform3D.IDENTITY))
 	bike.set_controls(rider_input.packet())
 	previous_position = _chassis().global_position
@@ -685,15 +690,16 @@ func _show_modal(kind: String) -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	modal.add_child(center)
 	var panel: PanelContainer = PanelContainer.new()
-	panel.custom_minimum_size.x = 750.0 if kind in ["bindings", "settings"] else (680.0 if kind in ["help", "tuning"] else 550.0)
+	panel.custom_minimum_size.x = 750.0 if kind in ["bindings", "settings", "handling"] else (680.0 if kind in ["help", "tuning"] else 550.0)
 	panel.add_theme_stylebox_override("panel", _panel_style(INK, Color("3b5066")))
 	center.add_child(panel)
 	var content: VBoxContainer = VBoxContainer.new()
 	content.add_theme_constant_override("separation", 13)
-	if kind in ["bindings", "settings"]:
+	if kind in ["bindings", "settings", "handling"]:
 		var scroll: ScrollContainer = ScrollContainer.new()
 		scroll.custom_minimum_size = Vector2(700.0, minf(560.0, get_viewport().get_visible_rect().size.y - 100.0))
 		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		scroll.follow_focus = kind == "handling"
 		panel.add_child(scroll)
 		content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		scroll.add_child(content)
@@ -707,6 +713,7 @@ func _show_modal(kind: String) -> void:
 		"settings": _settings_content(content)
 		"bindings": _bindings_content(content)
 		"tuning": _tuning_content(content)
+		"handling": _handling_content(content)
 
 func _welcome_content(content: VBoxContainer) -> void:
 	content.add_child(_label("LEARN THE RIDE.", 36))
@@ -732,6 +739,7 @@ func _pause_content(content: VBoxContainer) -> void:
 	content.add_child(_button("Resume ride", _resume, true))
 	content.add_child(_button("Controls", func() -> void: _show_modal("help")))
 	content.add_child(_button("Settings + controller binds", func() -> void: _show_modal("settings")))
+	content.add_child(_button("Handling setup", _open_handling_setup))
 	content.add_child(_button("Suspension setup", func() -> void:
 		if absf(float(bike.get_telemetry().get("speedMps", 0.0))) < 1.0:
 			_show_modal("tuning")
@@ -755,6 +763,7 @@ func _help_content(content: VBoxContainer) -> void:
 	keyboard.add_child(_label("A / D  Lean command / direct bars     Z / X  Rider lean", 15))
 	keyboard.add_child(_label("I / K  Body forward / back     J / L  Body left / right", 15))
 	keyboard.add_child(_label("C  Seated / standing     Feet lift and plant automatically", 15))
+	keyboard.add_child(_label("F + lean on a jump face  Hold to scrub the takeoff", 15))
 	keyboard.add_child(_label("R  Recover     M  Camera     H  Help     U  Setup     ESC  Pause", 15))
 	keyboard.add_child(_label("Hold right mouse to orbit · Mouse wheel changes camera distance", 14, MUTED))
 	keyboard.add_child(_label("Starting: E → gentle W → hold B to release the clutch. Feet lift as you move.\nV/B hold the lever position. A/D requests bike lean; Z/X moves your upper body.", 14, TEAL))
@@ -768,6 +777,7 @@ func _help_content(content: VBoxContainer) -> void:
 	controller.add_child(_label("In flight: right stick back pulls nose up; forward pushes nose down", 15))
 	controller.add_child(_label("D-pad ← / →  Rider lean     D-pad ↓ / ↑  Shift down / up", 15))
 	controller.add_child(_label("A  Seated / standing     Y  Recover     Feet move automatically", 15))
+	controller.add_child(_label("X + lean on a jump face  Hold to scrub the takeoff", 15))
 	controller.add_child(_label("Left-stick click  Engine start     Right-stick click  Help", 15))
 	controller.add_child(_label("B / Circle  Camera mode     Menu / Start  Pause", 15))
 	controller.add_child(_label("Customize every controller action in Settings → Controller bindings.\nKeyboard controls remain available. Only your selected controller drives.", 14, TEAL))
@@ -790,6 +800,7 @@ func _settings_content(content: VBoxContainer) -> void:
 	var mode_info: Label = _label("Lean control: your rider countersteers and braces over bumps.\nMove your body independently to counterbalance the bike.\nFeet lift while riding and plant when you stop.", 14, MUTED)
 	content.add_child(mode_info)
 	content.add_child(_button("Customize controller bindings", func() -> void: _show_modal("bindings")))
+	content.add_child(_button("Handling setup · park before adjusting", _open_handling_setup))
 	content.add_child(_label("CAMERA", 16, TEAL))
 	var camera_select: OptionButton = OptionButton.new()
 	camera_select.add_item("Chase view", 0)
@@ -880,6 +891,89 @@ func _restore_tuning_baseline() -> void:
 	for key: String in tuning_fields:
 		var parts: PackedStringArray = key.split(".")
 		(tuning_fields[key] as SpinBox).value = float((baseline.get(parts[0], {}) as Dictionary).get(parts[1], 0.0))
+
+func _handling_available() -> bool:
+	if bike == null:
+		return false
+	var telemetry: Dictionary = bike.get_telemetry()
+	return absf(float(telemetry.get("speedMps", 0.0))) < 0.5 and not bool(telemetry.get("crashed", false))
+
+func _open_handling_setup() -> void:
+	if _handling_available():
+		_show_modal("handling")
+	else:
+		_notice("Park upright before changing handling settings.", 4.0)
+
+func _handling_content(content: VBoxContainer) -> void:
+	content.add_child(_label("250F / HANDLING SETUP", 26))
+	var introduction := _label("Parked changes · saved on this computer after Apply.\nStart with the tested defaults, then change one setting at a time.", 14, MUTED)
+	introduction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(introduction)
+	var assist_info := _label("Gameplay assistance scales low-speed balance, airborne torque and landing support.\nAt zero, the virtual rider still countersteers; Direct mode gives manual bars.\nHigher response times mean slower response. Grip scales preserve terrain differences.", 13, TEAL)
+	assist_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(assist_info)
+	var first_apply := _button("Apply and ride", _apply_handling, true)
+	content.add_child(first_apply)
+	first_apply.call_deferred("grab_focus")
+	content.add_child(_button("Restore tested defaults in this menu", _restore_handling_baseline))
+	handling_status = _label("", 13, ORANGE)
+	handling_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(handling_status)
+	handling_fields.clear()
+	var group := ""
+	var grid: GridContainer
+	for field: Array in HandlingSetup.FIELDS:
+		if str(field[1]) != group:
+			group = str(field[1])
+			content.add_child(_label(group, 16, TEAL))
+			grid = GridContainer.new()
+			grid.columns = 2
+			grid.add_theme_constant_override("h_separation", 16)
+			grid.add_theme_constant_override("v_separation", 9)
+			content.add_child(grid)
+		var title := _label(str(field[2]), 14)
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(title)
+		var spin := SpinBox.new()
+		spin.min_value = float(field[3])
+		spin.max_value = float(field[4])
+		spin.step = float(field[5])
+		spin.value = HandlingSetup.value_at(bike.config, str(field[0]), float(field[6]))
+		spin.custom_minimum_size.x = 125.0
+		grid.add_child(spin)
+		handling_fields[str(field[0])] = spin
+	content.add_child(_label("Spring, compression, rebound and preload remain in Suspension setup.\nDefaults express the intended simulation / accessibility balance; they are not a percentage formula.", 13, MUTED))
+	content.add_child(_button("Apply and ride", _apply_handling, true))
+	content.add_child(_button("Cancel", func() -> void: _show_modal("pause" if session_started else "welcome")))
+
+func _restore_handling_baseline() -> void:
+	for field: Array in HandlingSetup.FIELDS:
+		var path := str(field[0])
+		(handling_fields[path] as SpinBox).value = HandlingSetup.value_at(cfg, path, float(field[6]))
+	handling_status.text = "Tested defaults loaded into the menu. Apply to use and save them."
+
+func _apply_handling() -> void:
+	if not _handling_available():
+		handling_status.text = "Park upright before applying handling settings."
+		return
+	var changes: Dictionary = {}
+	for path: String in handling_fields:
+		var parts := path.split(".")
+		var branch: Dictionary = changes
+		for index in range(parts.size() - 1):
+			if not branch.has(parts[index]):
+				branch[parts[index]] = {}
+			branch = branch[parts[index]]
+		branch[parts[-1]] = (handling_fields[path] as SpinBox).value
+	if not bike.has_method("apply_handling_setup") or not bike.apply_handling_setup(changes):
+		handling_status.text = "Setup rejected. Use the supported ranges while parked upright."
+		return
+	var save_status := HandlingSetup.save_file("user://handling.cfg", changes)
+	if session_started:
+		_resume()
+	else:
+		_show_modal("welcome")
+	_notice("Handling setup applied and saved." if save_status == OK else "Handling applied, but could not be saved to this computer.", 4.0)
 
 func _apply_tuning() -> void:
 	if absf(float(bike.get_telemetry().get("speedMps", 0.0))) >= 1.0:

@@ -1,4 +1,4 @@
-DIRTLINE MX / WINDOWS PC / 0.5.0
+DIRTLINE MX / WINDOWS PC / 0.6.0
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
@@ -21,6 +21,7 @@ A / D = requested bike lean in default mode; Z / X = upper-body lean
 In manual handlebar mode A / D applies steering effort directly.
 I / K = rider forward / back; J / L = rider left / right
 C = standing / seated; feet move automatically
+Hold F = scrub while leaning on an ascending jump face
 R = remount immediately; T = engine starter
 H = controls; U = parked suspension setup; Escape = pause
 M = switch between chase view and first-person helmet view
@@ -32,6 +33,7 @@ LB = pull clutch, release it progressively to engage
 Left stick = requested bike lean; right stick = rider positioning
 D-pad left / right = upper-body lean; down / up = gears
 A = standing / seated; Y = recovery; feet move automatically
+Hold X = scrub while leaning on an ascending jump face
 B / Circle = switch between chase view and helmet view
 Left stick click = starter; right stick click = help; Start = pause
 
@@ -42,25 +44,41 @@ You can remap every action, change deadzones, invert axes, clear bindings or
 restore defaults. Confirm replacement if the input is already assigned.
 Bindings and camera preferences are saved on this computer.
 
+HANDLING SETTINGS
+Park upright, then open Escape / Start -> Handling setup.
+Front/rear grip, steering and lean, balance/landing assistance, airborne rates,
+whip recovery, scrubbing and rider transitions are independently adjustable.
+Apply and ride saves your setup locally. Restore tested defaults loads the
+shipped setup into the menu; apply it to reset your saved handling.
+For more simulation, lower gameplay and air assistance together.
+For more forgiveness, modestly shorten neutral rotational decay and increase
+whip counter-input. Change one setting at a time; keep tire grip near default.
+U remains the separate suspension spring/compression/rebound/preload menu.
+
 RIDING MODES AND CAMERA
-Default lean control asks the virtual rider to countersteer physically through
-the handlebars. It does not lock the bike upright or correct its landing.
-The bike lean request and rider body movement are independent. Move your
-body toward the outside of a turn to counterbalance the bike beneath you.
-The rider braces over bumps; full manual body input takes priority.
-In sustained flight, right stick back pulls the nose up and forward pushes
-it down through the physical rider. Left stick moves the bars and right stick
-sideways twists your hips. Counter-input brings a whip back.
-These inputs move the physical rider/bike; they are not a canned animation.
+Default lean control countersteers through the real handlebars. It includes
+bounded low-speed balance, air control and landing assistance for a responsive,
+forgiving ride. The bike remains free to lean, slide, rotate and crash.
+Bike lean and rider body movement are independent. Move your body toward the
+outside of a turn to counterbalance the bike beneath you.
+In the air: left stick controls roll; right stick sideways controls yaw;
+right stick forward pushes the nose down and back pulls it up.
+For a whip, combine roll and sideways body input early in the jump, then apply
+opposite input before landing. Releasing the sticks slows unwanted rotation;
+it does not automatically point the bike at the landing.
+For a scrub, hold F / controller X while leaning into the rising jump face.
+The rider crouches and absorbs the face through the actual suspension.
+Scrubbing acts before takeoff; it cannot push you down after leaving the ground.
+Start with modest lean on the smaller tabletop and leave time to recover.
 The chase camera ignores your own rider and bike, so body-stick movement
 cannot pull it into the motorcycle. Right mouse remains the look control.
-Manual handlebar mode is available in Settings for direct steering effort.
+Manual handlebar mode is available in Settings for direct steering effort
+and disables the virtual-rider game assistance. It requires more precise input.
 If an older build saved manual mode, select Virtual rider in Settings to use
 the updated lean-control handling. Your existing bindings remain saved.
 Feet plant at a stop and lift automatically, including when you prefer to stand.
 At walking speed the rider can dab a foot to catch a loaded loss of balance.
-Slides remain recoverable
-until the actual bike loses balance; excess speed, lean and bad landings crash.
+Slides remain recoverable until the actual bike loses balance; excess speed, lean and bad landings crash.
 After a crash, the bike and rider remount automatically after one second.
 R / controller Y remounts immediately. Recovery restores seated posture,
 feet down, neutral and cleared movement near the crash; unsafe ground uses
@@ -68,7 +86,9 @@ the lab spawn. Release held controls, then use them again to ride.
 Press M / controller B for helmet view; adjust field of view in Settings.
 Chase view is closer, and the geared rider/bike have a larger screen presence.
 The rider uses a relaxed seated pose and a higher standing attack stance.
-Hands stay on the grips and boots on the pegs while the physical torso moves.
+Hands follow the grips. Boots normally stay on the pegs; the inside leg extends
+through suitable seated turns and retracts smoothly on exit or direction change.
+Standing, support feet and cornering legs blend from their current positions.
 
 THE PROVING GROUND
 The circuit is now about 873 m long with 14 ordered gates. The original 40 m
@@ -76,7 +96,8 @@ flat launch, 100 m practice straight, bumps, whoops, berms and grip pads remain.
 Follow the extended east straight for the 3.2 m progression tabletop, then
 the 4.5 m big tabletop with a 42 m landing. The jump section is 15 m wide
 with graded shoulders; the west return adds broad rollers.
-Straighten before takeoff, use body/bar inputs in the air, and land in line
+Brake before corners and straighten before takeoff. Use the air sticks to
+control rotation and prepare an aligned landing. Land in line
 with the downhill surface. Practice the smaller jump before the larger one.
 Pass track gates in order to time a local lap. Recovery cancels that lap.
 U opens spring, compression/rebound damping and preload settings while parked.

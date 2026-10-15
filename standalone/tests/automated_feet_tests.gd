@@ -119,7 +119,8 @@ func _run() -> void:
 	button.device = 7
 	button.button_index = JOY_BUTTON_X
 	button.pressed = true
-	check(bindings.action_for_event(button, 7).is_empty(), "unmapped Xbox X cannot toggle foot state")
+	check(bindings.action_for_event(button, 7) == "scrub" and not bindings.bindings.has("feet"),
+		"Xbox X controls scrub while automatic feet remain independent")
 	var game: Node3D = Main.instantiate()
 	root.add_child(game)
 	await process_frame

@@ -10,6 +10,7 @@ var steer: float = 0.0
 var lean: float = 0.0
 var body_forward: float = 0.0
 var body_side: float = 0.0
+var scrub: float = 0.0
 var standing: bool = false # Preferred riding posture; planted feet temporarily seat the rider.
 var foot_down: bool = true
 var controller_id: int = -1
@@ -41,7 +42,8 @@ func _init() -> void:
 		"steer_left": KEY_A, "steer_right": KEY_D, "lean_left": KEY_Z, "lean_right": KEY_X,
 		"body_forward": KEY_I, "body_back": KEY_K, "body_left": KEY_J, "body_right": KEY_L,
 		"downshift": KEY_Q, "upshift": KEY_E, "stand": KEY_C, "recover": KEY_R,
-		"engine": KEY_T, "help": KEY_H, "setup": KEY_U, "pause": KEY_ESCAPE, "camera": KEY_M}
+		"engine": KEY_T, "help": KEY_H, "setup": KEY_U, "pause": KEY_ESCAPE, "camera": KEY_M,
+		"scrub": KEY_F}
 	# Feet are a rider reflex, not a command. Remove a legacy action when
 	# restarting the project in an editor/session that had the old bindings.
 	if InputMap.has_action("mx_feet"):
@@ -104,6 +106,9 @@ func command(event: InputEvent) -> String:
 				break
 	elif event is InputEventJoypadButton or event is InputEventJoypadMotion:
 		action = str(controller_bindings.action_for_event(event, controller_id))
+	# Scrub is a held/analog riding axis, never a toggle or one-shot command.
+	if action == "scrub":
+		return ""
 	if (event is InputEventKey and _blocked_keys.has("mx_" + action)) or ((event is InputEventJoypadButton or event is InputEventJoypadMotion) and _blocked_pad.has(action)):
 		return ""
 	return action
@@ -199,6 +204,7 @@ func tick(delta: float, enabled: bool) -> Dictionary:
 		lean = _controller_pair("lean_left", "lean_right")
 		body_forward = _controller_pair("body_back", "body_forward")
 		body_side = _controller_pair("body_left", "body_right")
+		scrub = _pad_strength("scrub")
 	else:
 		throttle = move_toward(throttle, 1.0 if _key_down("mx_throttle") else 0.0, delta * (1.25 if _key_down("mx_throttle") else 5.0))
 		front_brake = move_toward(front_brake, 1.0 if _key_down("mx_front_brake") else 0.0, delta * (2.5 if _key_down("mx_front_brake") else 7.0))
@@ -213,6 +219,7 @@ func tick(delta: float, enabled: bool) -> Dictionary:
 		lean = move_toward(lean, _key_axis("mx_lean_left", "mx_lean_right"), delta * 3.0)
 		body_forward = move_toward(body_forward, _key_axis("mx_body_back", "mx_body_forward"), delta * 3.0)
 		body_side = move_toward(body_side, _key_axis("mx_body_left", "mx_body_right"), delta * 3.0)
+		scrub = 1.0 if _key_down("mx_scrub") else 0.0
 	return packet()
 
 func _controller_pair(negative: String, positive: String) -> float:
@@ -227,11 +234,13 @@ func release_controls() -> void:
 	lean = 0.0
 	body_forward = 0.0
 	body_side = 0.0
+	scrub = 0.0
 
 func packet() -> Dictionary:
 	return {"throttle": throttle, "frontBrake": front_brake, "rearBrake": rear_brake,
 		"clutch": clutch, "steer": steer, "lean": lean, "bodyForward": body_forward,
-		"bodySide": body_side, "standing": standing and not foot_down, "footDown": foot_down}
+		"bodySide": body_side, "scrub": scrub,
+		"standing": standing and not foot_down, "footDown": foot_down}
 
 func _controller_connection_changed(device: int, connected: bool) -> void:
 	if not connected and device == controller_id:

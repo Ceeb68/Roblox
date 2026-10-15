@@ -1,17 +1,17 @@
 # Dirtline MX
 
-A standalone Windows motocross simulation prototype, built with Godot 4.6.3 and Jolt Physics. Version 0.5 improves partial-stick turning, separates bike lean from rider counterbalance, corrects an uncommanded airborne pitch bias, and adds automatic feet and a more relaxed riding posture. The roughly 873 m circuit, larger tabletops, helmet view and customizable controller bindings are included.
+A standalone Windows motocross game prototype, built with Godot 4.6.3 and Jolt Physics. Version 0.6 rebuilds tire response, deliberate lean control, airborne rotation and suspension damping, adds a physical jump scrub, and blends the rider's cornering legs and body continuously. The handling target is roughly 75% simulation and 25% forgiveness. The 873 m circuit, helmet view, automatic recovery and customizable controller bindings are included.
 
 ![Dirtline MX physics prototype](downloads/DirtlineMX-preview.png)
 
 ## Play on Windows
 
-1. [Download Dirtline MX v0.5.0 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.5.0.zip).
+1. [Download Dirtline MX v0.6.0 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.6.0.zip).
 2. Right-click the ZIP and choose **Extract All**.
 3. Open the extracted folder and double-click **DirtlineMX.exe**. Keep its `.pck` file beside it.
 4. The bike starts in neutral with the clutch pulled and feet down. Press **E** for first, hold **W** to build revs, then hold **B** to release the clutch gradually. Feet lift automatically during launch and plant when you stop.
 
-Use **A/D** or the left stick to request bike lean; the virtual rider countersteers through the handlebars. **Z/X** moves the rider's upper body. Use **M / controller B** for first-person helmet view, **H** for help and **U** for suspension setup. Open **Escape / Start → Settings + controller binds → Controller bindings** to customize buttons, axes, inversion and deadzones. Preferences are saved on your computer. No Roblox installation or game editor is needed to play.
+Use **A/D** or the left stick to request bike lean; the virtual rider countersteers through the handlebars. **Z/X** moves the rider's upper body independently. In the air, use the left stick for roll and the right stick for pitch/yaw; counter-input returns a whip. Hold **F / controller X** while leaning on an ascending jump face to scrub. Use **M / controller B** for helmet view, **H** for help and **U** for suspension setup. Open **Escape / Start → Settings + controller binds → Controller bindings** to customize controls. No Roblox installation or game editor is needed to play.
 
 If you previously selected manual handlebars, choose **Virtual rider** in Settings to use the updated lean control.
 
@@ -21,11 +21,11 @@ After a crash, bike and rider remount automatically after **one second** near th
 
 ![The extended Dirtline MX circuit](downloads/DirtlineMX-course.png)
 
-The 873 m proving circuit has a 40 m flat launch, a separate 100 m practice straight, the original berms/ruts/bumps/whoops, and two larger 3.2 m and 4.5 m tabletops on the extended east straight. The new jump section has 15 m roads with graded shoulders and a 42 m landing on the bigger tabletop. Native wheel bodies and suspension joints provide collision and support; custom tire/drivetrain models supply grip, slip, clutch, manual gears, braking and engine reactions. Default virtual-rider control uses finite, physical countersteering to balance and follow your lean command. Fully manual handlebars remain selectable. The bike's pose is never locked upright, and airborne landing orientation is not corrected.
+The 873 m proving circuit has a 40 m flat launch, a separate 100 m practice straight, berms, ruts, bumps, whoops, and 3.2 m and 4.5 m tabletops. Five independent native bodies model the frame, rider, fork and wheels. Custom tire/drivetrain models supply grip, slip, clutch, manual gears, braking and engine reactions. Default virtual-rider handling adds bounded low-speed balance and airborne rotation assistance to the physical simulation. It never assigns the bike's pose or chooses a landing heading. Fully manual handlebars remain selectable.
 
 This is an early physics prototype. Numerical and native-engine tests establish specific behaviors; they do not establish MX Bikes-level riding quality. Calibration, human obstacle acceptance, tire/soil detail and production art remain work in progress. Windows desktop execution must also be checked on a Windows PC; the cloud development machine runs Linux.
 
-[Research notes](standalone/MX_BIKES_RESEARCH.md) distinguish published vehicle-dynamics findings from our engineering choices. Official MX Bikes pages were blocked by the cloud network policy, so this build makes no claims about its proprietary settings or code.
+[Research notes](standalone/MX_BIKES_RESEARCH.md) distinguish published vehicle-dynamics findings from our original game-assistance choices. [Handling validation](standalone/VALIDATION.md) records actual native riding tests and their limits. No proprietary MX Bikes or MX Simulator code, physics engine or assets are used.
 
 | Action | Keyboard |
 | --- | --- |
@@ -35,6 +35,7 @@ This is an early physics prototype. Numerical and native-engine tests establish 
 | Bike lean command / rider lean | A–D / Z–X |
 | Rider forward–back / side | I–K / J–L |
 | Standing / seated | C |
+| Scrub on an ascending jump face | Hold F; controller X |
 | Recover / engine starter | R / T |
 | Help / suspension setup | H / U |
 | Chase / first-person camera | M; controller B / Circle |

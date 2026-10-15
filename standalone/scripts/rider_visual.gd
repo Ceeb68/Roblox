@@ -31,16 +31,34 @@ var _first_person: bool = false
 var _built: bool = false
 var _compression_pose: float = 0.0
 var _acceleration_pose: float = 0.0
+var _support_pose := Vector2(1.0, 0.0)
+var _standing_pose := Vector2.ZERO
+var _corner_pose := Vector2.ZERO
+var _pose_initialized := false
+var _animation_settings: Dictionary = {}
+
+## Times are the critical spring's response time (seconds), distances metres.
+## These influence presentation only. A cornering boot never deploys a collider.
+const ANIMATION_DEFAULTS := {
+	"TransitionTime": 0.12, "SupportTransitionTime": 0.16,
+	"CornerTransitionTime": 0.13, "CornerFullLean": 0.35,
+	"CornerMinSpeed": 1.5, "CornerFullSpeed": 3.0,
+	"CornerMaxSpeed": 16.0, "CornerEndSpeed": 23.0,
+	"LegOutSideTravel": 0.18, "LegOutForwardTravel": 0.40,
+	"LegOutLift": 0.08, "Strength": 1.0
+}
 
 const SEATED_HIP := Vector3(0.0, 0.408, 0.170)
 const SUPPORT_HIP := Vector3(0.0, 0.325, 0.165)
 const TORSO_LENGTH := 0.445
 
-func configure(chassis_body: Node3D, steering_fork: Node3D) -> void:
+func configure(chassis_body: Node3D, steering_fork: Node3D,
+		animation_settings: Dictionary = {}) -> void:
 	if _built:
 		return
 	_chassis = chassis_body
 	_fork = steering_fork
+	set_animation_settings(animation_settings)
 	name = "GearedMotocrossRider"
 	_pelvis = _garment(self, [Vector2(0.142, 0.096), Vector2(0.158, 0.116),
 		Vector2(0.153, 0.111), Vector2(0.145, 0.104)], 0.19, NAVY)
@@ -128,6 +146,16 @@ func configure(chassis_body: Node3D, steering_fork: Node3D) -> void:
 	_built = true
 	update_pose(0, 0, 0, 0, true)
 
+func set_animation_settings(settings: Dictionary) -> void:
+	# Live parked tuning changes coefficients, preserving the current pose and
+	# its velocity. Reconfiguring the whole mesh would reset an interrupted turn.
+	if _animation_settings.is_empty():
+		_animation_settings = ANIMATION_DEFAULTS.duplicate()
+	for key: String in ANIMATION_DEFAULTS:
+		var value: Variant = settings.get(key)
+		if (value is float or value is int) and is_finite(float(value)):
+			_animation_settings[key] = float(value)
+
 func update_pose(body_forward: float, body_side: float, lean: float, standing: float,
 		feet_down: bool, riding_state: Dictionary = {}) -> void:
 	if not _built:
@@ -135,10 +163,13 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 	# Deployed boots are a relaxed seated support stance. A rider cannot stand
 	# on the pegs and place both feet on the ground at the same time. The input
 	# layer raises/lowers the real supporting boots automatically while riding.
-	var stand := 0.0 if feet_down else clampf(standing, 0, 1)
 	var physical_motion = _physical_rider_motion(riding_state)
 	var follows_physical_body := physical_motion is Transform3D
 	var dt := clampf(float(riding_state.get("dt", 1.0 / 240.0)), 0.0, 0.1)
+	_update_animation_state(standing, feet_down, riding_state, dt)
+	var support := _support_pose.x
+	var stand := _standing_pose.x * (1.0 - support)
+	var scrub_crouch := clampf(float(riding_state.get("scrub_crouch", 0.0)), 0.0, 0.28)
 	var compression := clampf(float(riding_state.get("suspension_compression", 0.18)), 0, 1)
 	var acceleration := clampf(float(riding_state.get("forward_acceleration", 0.0)), -10, 10)
 	if bool(riding_state.get("pose_reset", false)) or follows_physical_body:
@@ -156,15 +187,19 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 	var fore_aft := clampf(body_forward, -1, 1) * -0.22
 	var flexion := _compression_pose * lerpf(0.25, 1.0, stand)
 	var reaction_shift := -_acceleration_pose * 0.0045
-	var hip_origin := SUPPORT_HIP if feet_down else SEATED_HIP
+	var hip_origin := SEATED_HIP.lerp(SUPPORT_HIP, support)
 	var hip := hip_origin + Vector3(lateral * 0.57, stand * 0.29 - flexion,
 		-stand * 0.027 + fore_aft * 0.34 + reaction_shift * 0.40)
-	if feet_down:
+	# The native reference includes this requested crouch. Put the same offset
+	# into the anatomical base before composing actual/reference motion, or a
+	# newly lowered target would falsely lift the rider before their body moved.
+	hip.y -= scrub_crouch
+	if support > 0.001:
 		# Both planted boots constrain pelvis height. Let the support stance
 		# crouch a little during body movement instead of lengthening a shin.
 		for side in [-1.0, 1.0]:
 			var hip_joint := hip + Vector3(side * 0.124, -0.005, 0)
-			var ankle := Vector3(side * 0.340, -0.613, 0.034)
+			var ankle := _boot_target(side) + Vector3(0, 0.022, 0.014)
 			var horizontal_distance_squared := Vector2(hip_joint.x - ankle.x,
 				hip_joint.z - ankle.z).length_squared()
 			var available_height := sqrt(maxf(0.0, 0.951 * 0.951 - horizontal_distance_squared))
@@ -188,14 +223,18 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 		hip = physical_motion * hip
 		shoulder_center = physical_motion * shoulder_center
 		spine_reference = anatomy_frame * spine_reference
+		if scrub_crouch > 0.0:
+			# A seated rider folds the torso rather than passing through the
+			# saddle. Standing hips remain free to absorb the native leg crouch.
+			# Keep the lower shoulder before the fixed-length spine solve below;
+			# it produces the corresponding hip hinge with planted peg contacts.
+			hip.y = maxf(hip.y, hip_origin.y)
 		# The simulated body is an aggregate human mass. Its capsule can briefly
 		# move beyond a planted leg's reach, so crouch the visual pelvis rather
 		# than lengthening a shin or making a supporting boot float off the ground.
 		for side in [-1.0, 1.0]:
 			var hip_offset := anatomy_frame * Vector3(side * 0.124, -0.005, 0)
-			var ankle := Vector3(side * 0.245, -0.079, 0.101)
-			if feet_down:
-				ankle = Vector3(side * 0.340, -0.613, 0.034)
+			var ankle := _boot_target(side) + Vector3(0, 0.022, 0.014)
 			var horizontal_distance_squared := Vector2(hip.x + hip_offset.x - ankle.x,
 				hip.z + hip_offset.z - ankle.z).length_squared()
 			var available_height := sqrt(maxf(0.0, 0.951 * 0.951 - horizontal_distance_squared))
@@ -250,14 +289,13 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 		var hip_side := hip + anatomy_frame * Vector3(side * 0.124, -0.005, 0)
 		# Boot origins are at the ankle; the sole extends 13 cm below the origin.
 		# Align the sole with the real peg top, not the ankle with the peg itself.
-		var boot_position := Vector3(side * 0.245, -0.101, 0.087)
-		if feet_down:
-			boot_position = Vector3(side * 0.340, -0.635, 0.020)
+		var boot_position := _boot_target(side)
+		var leg_out := _inside_leg_weight(side)
 		var ankle := boot_position + Vector3(0, 0.022, 0.014)
 		# Knees point toward the shrouds and grip the bike rather than spreading
 		# outside the ankles. In standing poses the remaining leg bend takes bumps.
 		var knee := _two_bone(hip_side, ankle, 0.480, 0.475,
-			anatomy_frame * Vector3(side * 0.07, 0.01, -1.0))
+			anatomy_frame * Vector3(side * lerpf(0.07, 0.6, leg_out), 0.01, -1.0))
 		_set_link(_thighs[i], hip_side, knee)
 		# Riding pants tuck into the tall protective boot. Extending the trouser
 		# mesh to the ankle hides the cuff and makes an MX boot read like a sneaker.
@@ -266,7 +304,75 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 		_knees[i].position = knee
 		_knees[i].basis = _basis_along(hip_side - knee)
 		_boots[i].position = boot_position
-		_boots[i].rotation = Vector3(0, side * -0.065, side * -0.06 if feet_down else 0.0)
+		_boots[i].rotation = Vector3(-leg_out * 0.16,
+			side * (-0.065 + leg_out * 0.24), side * -0.06 * support)
+
+func _update_animation_state(standing: float, feet_down: bool,
+		riding_state: Dictionary, dt: float) -> void:
+	var support_target := 1.0 if feet_down else 0.0
+	var standing_target := clampf(standing, 0.0, 1.0)
+	var corner_target := 0.0
+	if bool(riding_state.get("grounded", false)) and not feet_down:
+		var speed := absf(float(riding_state.get("speed", 0.0)))
+		var speed_blend := smoothstep(_setting("CornerMinSpeed", 0.0, 8.0),
+			_setting("CornerFullSpeed", 0.1, 12.0), speed)
+		speed_blend *= 1.0 - smoothstep(_setting("CornerMaxSpeed", 10.0, 35.0),
+			_setting("CornerEndSpeed", 12.0, 45.0), speed)
+		var bank := float(riding_state.get("bank", 0.0))
+		var steer_angle := float(riding_state.get("steer_angle", 0.0))
+		# Actual bank chooses the inside leg. The real fork contributes a small
+		# preparation cue near walking pace, without showing countersteer as a
+		# whole opposite-side corner pose. No raw input drives the leg animation.
+		var corner := clampf(bank / _setting("CornerFullLean", 0.12, 0.8)
+			+ steer_angle * 0.18 * (1.0 - smoothstep(0.05, 0.18, absf(bank))), -1.0, 1.0)
+		corner_target = corner * speed_blend * (1.0 - standing_target)
+		corner_target *= _setting("Strength", 0.0, 1.0)
+	if not _pose_initialized or bool(riding_state.get("pose_reset", false)):
+		# Reset/remount deliberately restores a clean pose in the same tick.
+		_support_pose = Vector2(support_target, 0.0)
+		_standing_pose = Vector2(standing_target, 0.0)
+		_corner_pose = Vector2(corner_target, 0.0)
+		_pose_initialized = true
+		return
+	_support_pose = _critical_step(_support_pose, support_target,
+		_setting("SupportTransitionTime", 0.04, 0.7), dt)
+	_standing_pose = _critical_step(_standing_pose, standing_target,
+		_setting("TransitionTime", 0.04, 0.7), dt)
+	_corner_pose = _critical_step(_corner_pose, corner_target,
+		_setting("CornerTransitionTime", 0.04, 0.7), dt)
+
+func _critical_step(state: Vector2, target: float, response: float, dt: float) -> Vector2:
+	# Exact solution of a critically damped spring over this timestep. Keeping
+	# velocity makes rapid left/right or stand/sit interruptions continuous.
+	var frequency := 2.0 / maxf(response, 0.001)
+	var error := state.x - target
+	var decay := exp(-frequency * dt)
+	var transient := state.y + frequency * error
+	return Vector2(target + (error + transient * dt) * decay,
+		(state.y - frequency * transient * dt) * decay)
+
+func _setting(key: String, minimum: float, maximum: float) -> float:
+	return clampf(float(_animation_settings.get(key, ANIMATION_DEFAULTS[key])), minimum, maximum)
+
+func _inside_leg_weight(side: float) -> float:
+	# Smoothstep's zero slope at neutral avoids a velocity kink when the signed
+	# phase changes side. Only one cornering leg can be extended at a time.
+	return smoothstep(0.0, 1.0, clampf(_corner_pose.x * side, 0.0, 1.0))
+
+func _boot_target(side: float) -> Vector3:
+	var riding := Vector3(side * 0.245, -0.101, 0.087)
+	var extension := _inside_leg_weight(side)
+	riding += Vector3(side * _setting("LegOutSideTravel", 0.0, 0.25),
+		_setting("LegOutLift", 0.0, 0.16),
+		-_setting("LegOutForwardTravel", 0.0, 0.52)) * extension
+	# One target per boot owns the full transition. This replaces competing
+	# planted/peg/corner animation branches, including interruption mid stride.
+	return riding.lerp(Vector3(side * 0.340, -0.635, 0.020), _support_pose.x)
+
+func get_animation_state() -> Dictionary:
+	return {"support": _support_pose.x, "standing": _standing_pose.x,
+		"corner": _corner_pose.x, "support_rate": _support_pose.y,
+		"standing_rate": _standing_pose.y, "corner_rate": _corner_pose.y}
 
 func _physical_rider_motion(riding_state: Dictionary) -> Variant:
 	var actual = riding_state.get("rider_transform")

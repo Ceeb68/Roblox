@@ -1,4 +1,4 @@
-# MX Bikes reference and balance research
+# MX Bikes / MX Simulator reference and original handling research
 
 MX Bikes is the experience target: a player commands the motorcycle and moves
 the rider, while tire forces, weight transfer, steering and suspension determine
@@ -6,18 +6,13 @@ the result. Our gains, tire model, crash rules and procedural rider are our own
 work. We have not obtained MX Bikes' proprietary simulation or animation code,
 and do not claim to reproduce it exactly.
 
-## What could actually be studied
+## What was actually read
 
-Requests to the official [MX Bikes about page](https://www.mx-bikes.com/?page=about),
-[downloads page](https://www.mx-bikes.com/?page=downloads),
-[PiBoSo MX Bikes wiki](https://docs.piboso.com/wiki/index.php/MX_Bikes) and
-[official forum](https://forum.mx-bikes.com/) failed at the cloud proxy's HTTPS
-CONNECT step with `403 Forbidden`. A later wiki retry returned the same result.
-These pages were **not read**. Therefore this revision does not attribute specific
-default input filters, automatic rider movement, steering gains, low-speed
-behavior or crash thresholds to MX Bikes. Official-domain additions were saved
-to the environment draft for future access; a draft save does not apply them to
-the running machine.
+On 14 October 2026 the official [MX Bikes overview](https://www.mx-bikes.com/?page=about) became accessible and was read. It describes a custom motorcycle-dynamics engine, setup options, an automotive-industry tire model, chassis flex, terrain deformation and wet terrain, alongside online racing. This identifies the depth of its public feature target. It does **not** publish its tire equations, steering/virtual-rider gains, airborne correction model, scrub implementation or animation transitions; those cannot be inferred from that page.
+
+The earlier revision's requests to the overview had failed with proxy `403` responses. That older blanket access statement is superseded by the successful overview read. The [official FAQ page](https://www.mx-bikes.com/?page=about&section=faq) also loaded on this revision but contained no substantive FAQ entries in the returned page. The [PiBoSo wiki](https://docs.piboso.com/wiki/index.php/MX_Bikes) remained blocked at HTTPS CONNECT with `403 Forbidden`. The [MX Simulator manual](https://mxsimulator.com/manual.html) and [home page](https://mxsimulator.com/) likewise returned CONNECT `403`; they were not read. No specific MX Simulator controller algorithm or tuning value is attributed to them.
+
+Our target qualities come from the user's requested behavior: planted ordinary corners, responsive countersteering, independent rider motion, real takeoff/landing interaction and meaningful controllable whips/scrubs. We did not inspect or copy either game's proprietary code, assets or physics engine. Matching those qualities is a design objective; exact replication is not claimed.
 
 The accessible research source was Jason K. Moore's *Human Control of a Bicycle*,
 a 2012 UC Davis mechanical engineering dissertation, read from the author's
@@ -31,42 +26,18 @@ GitHub repository. The following links pin the inspected revision
 | [Model extensions](https://github.com/moorepants/dissertation/blob/685b5e84ce4b366f43b8cd9ea19d6b5de0e7ae1c/extensions.rst), Leaning rider extension | The reviewed models give body lean substantially less authority than steering torque. Rider flexibility changes stability modes; guaranteed hands-free stability does not follow from a rigid-rider model. | Meaningful body movement and weight transfer should supplement steering. Our aggregate rider mass/COM model remains an approximation; a visible pose change alone is not a complete rider dynamics model. |
 | [Motion capture](https://github.com/moorepants/dissertation/blob/685b5e84ce4b366f43b8cd9ea19d6b5de0e7ae1c/motioncapture.rst), conclusions | Observed rider motion includes lean, bend, twist, bounce and knee movement, with more steering activity at low speeds. This work studies bicycling, including pedaling. | Articulate the rider at hips, shoulders, elbows and knees, keeping hands and boots attached to their supports. Motocross attack posture and terrain absorption are our design choices, not measured MX Bikes animation or directly validated by bicycle pedaling experiments. |
 
-## Handling choices and validation
+## Original handling choices and validation
 
-The user explicitly selected lean control with a virtual rider. That authorizes
-a physical rider controller; the direct handlebar mode remains separate.
+The user selected lean control with a virtual rider and subsequently requested a roughly 75% simulation / 25% forgiveness philosophy, including mild low-speed and airborne assistance. The current implementation follows that newer direction. It does not treat that percentage as a physical formula or claim that either reference game uses the same assistance.
 
-The revision targets abrupt input reversals, short front/rear contact losses and
-small disturbances. Contact confidence and bank-intent filtering are engineering
-choices for our native Jolt model. They must not create tire traction when a wheel
-has no contact. Fully airborne motion must remain ballistic, without an automatic
-landing or upright torque. Grip limits must still permit slides and genuine falls.
+Grounded lean still goes through the existing finite physical steering bearing. The combined bike/rider bank request, actual rider COM, measured roll/rate, speed and load determine the response. A bounded roll-rate task improves deliberate transitions; a separate calm neutral task avoids chasing a new direction during release. Countersteering is actual wheel/fork movement, not a rotation assigned to the chassis. The small loaded low-speed balance torque is an explicit game aid, independently adjustable and disabled in direct mode.
 
-Our native traces also exposed an invalid use of the two-patch steering model
-while only the rear wheel supported the bike. Steering an unsupported front wheel
-cannot generate the assumed ground curvature, but it can generate real gyroscopic
-reactions. The revision uses bounded joint-local bar grip in that situation and
-in flight. Its inputs are fork angle/rate and the player's bar request, without
-world-attitude feedback. Front-loaded bracing moves the existing simulated rider
-through finite articulation; manual positioning remains the posture baseline.
-These are our model choices, not verified MX Bikes behavior. Native comparisons
-then showed that the aggregate rider approximation was too rigid over whoops.
-The revision gives the rider its own 78 kg rigid body, with bounded compliant
-leg forces and torso torque paired at the same world contact point with the
-frame. Frame/rider inertias stay fixed; body motion now exchanges real momentum.
-This is a rigid torso and muscle/leg approximation, not a complete human skeleton.
+The airborne task adds an explicitly external, bounded **rate-control** torque as the accessible part of the design. Separate pitch/roll/yaw and power budgets use the actual assembly inertia; native wheel gyros, rider counter-motion and drivetrain reactions remain. Neutral damping slows unintended rotation. Opposite input requests a return rate, without knowing the takeoff heading, world-up attitude or landing direction. This is not physically conserved angular momentum from a free rider alone. Zero-strength/direct/native-mechanics tests retain the unassisted dynamics and conservation checks separately. No extra translational flight force is used.
 
-Steady turns alone cannot validate these choices. Useful native scenarios include
-short steer pulses and reversals, release from moderate lean, braking while
-banked, small rough-ground disturbances, one-wheel unloading, and grip changes.
-Existing unsupported-balance, airborne and real crash checks must continue to
-pass. Native automated checks cannot establish that the riding feel matches MX
-Bikes; Windows playtesting with a real controller remains necessary.
+The scrub task prepares only on a positively loaded rising face with actual bank. A terrain-normal/edge lookahead recognizes the approaching crest so the physical leg absorption occurs near takeoff, rather than settling/rebounding early on the face. This is geometric observation, not jump-coordinate logic. It lowers the physical rider through the existing muscle target and increases passive suspension absorption. The airborne posture holds its last prepared state; the complete COM remains ballistic under gravity and measured aerodynamic drag. Matched takeoff tests compare lean alone with the same lean plus scrub so a cosmetic crouch cannot masquerade as trajectory reduction.
 
-The normal steady-turn relationship `tan(bank) = speed² / (gravity × radius)`
-is a basic force-balance check, not a complete motorcycle model. Transients,
-steering geometry, rider inertia, independent tire load and suspension response
-need separate checks. Our empirical tires, inferred contact loads, simplified
-physical rider and static terrain remain material limits. Tire loads are inferred
-from completed native wheel momentum along the free suspension axis; explicit
-collision-estimate fallbacks cover mechanical stops and missing/singular samples.
+The front and rear use separately calibrated brush slopes and relaxation distances with a combined drive/brake/lateral grip ellipse. Ordinary response can become more planted without raising surface friction. These empirical knobby-tire coefficients are not a claim to use MX Bikes' publicly described automotive tire model. The game does not yet implement chassis flex, deformable soil or pneumatic tire carcasses.
+
+The rider has an independent 78 kg native torso with bounded compliant support and common-point reaction pairs. Continuous visual pose/leg filters use its real motion and loaded turn state, with one inverse-kinematics solution per limb. This is a torso/muscle and procedural-limb approximation, not a full biomechanical model or a measured animation library.
+
+The steady-turn relationship `tan(bank) = speed² / (gravity × radius)` is a basic force-balance check, not a full motorcycle model. Transients, steering geometry, rider inertia, separate tire load and suspension require native tests. [Current validation](VALIDATION.md) records stronger trajectory/slip/response checks, actual whip return, physical scrub comparisons and a controls-only full-track lap. Automated success establishes those recipes; human riding feel, Windows execution and controller hardware still need actual PC playtesting.

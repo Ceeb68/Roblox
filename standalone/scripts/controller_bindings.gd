@@ -4,14 +4,14 @@ const FILE_PATH: String = "user://controller_bindings.cfg"
 const ACTIONS: Array[String] = ["throttle", "front_brake", "rear_brake", "clutch",
 	"steer_left", "steer_right", "lean_left", "lean_right", "body_forward", "body_back",
 	"body_left", "body_right", "upshift", "downshift", "stand", "recover",
-	"engine", "camera", "help", "setup", "pause"]
+	"engine", "camera", "help", "setup", "pause", "scrub"]
 const LABELS: Dictionary = {"throttle": "Throttle", "front_brake": "Front brake", "rear_brake": "Rear brake",
 	"clutch": "Clutch lever", "steer_left": "Bike lean / bars left", "steer_right": "Bike lean / bars right",
 	"lean_left": "Rider lean left", "lean_right": "Rider lean right", "body_forward": "Rider forward",
 	"body_back": "Rider backward", "body_left": "Rider left", "body_right": "Rider right",
 	"upshift": "Shift up", "downshift": "Shift down", "stand": "Stand / sit",
 	"recover": "Recover", "engine": "Engine start", "camera": "Camera mode", "help": "Controls",
-	"setup": "Suspension setup", "pause": "Pause"}
+	"setup": "Suspension setup", "pause": "Pause", "scrub": "Scrub (hold / analog)"}
 var bindings: Dictionary = {}
 var deadzone: float = 0.14
 var trigger_deadzone: float = 0.03
@@ -38,7 +38,8 @@ func reset_defaults() -> void:
 		"upshift": _button(JOY_BUTTON_DPAD_UP), "downshift": _button(JOY_BUTTON_DPAD_DOWN),
 		"stand": _button(JOY_BUTTON_A), "recover": _button(JOY_BUTTON_Y),
 		"engine": _button(JOY_BUTTON_LEFT_STICK), "camera": _button(JOY_BUTTON_B),
-		"help": _button(JOY_BUTTON_RIGHT_STICK), "setup": {}, "pause": _button(JOY_BUTTON_START)}
+		"help": _button(JOY_BUTTON_RIGHT_STICK), "setup": {}, "pause": _button(JOY_BUTTON_START),
+		"scrub": _button(JOY_BUTTON_X)}
 	deadzone = 0.14
 	trigger_deadzone = 0.03
 	_axis_latches.clear()
@@ -157,7 +158,7 @@ func describe(action: String) -> String:
 
 func save_file(path: String = FILE_PATH) -> Error:
 	var file: ConfigFile = ConfigFile.new()
-	file.set_value("controller", "version", 1)
+	file.set_value("controller", "version", 2)
 	file.set_value("controller", "deadzone", clampf(deadzone, 0.0, 0.5))
 	file.set_value("controller", "trigger_deadzone", clampf(trigger_deadzone, 0.0, 0.3))
 	for action: String in ACTIONS:
@@ -176,5 +177,10 @@ func load_file(path: String = FILE_PATH) -> Error:
 		var value: Variant = file.get_value("bindings", action, bindings.get(action, {}))
 		loaded[action] = value.duplicate() if value is Dictionary and is_valid(value as Dictionary) else bindings.get(action, {}).duplicate()
 	bindings = loaded
+	# Old layouts may already use X for a customized action. Add the new
+	# default only when it is free; never overwrite a player's saved mapping.
+	if not file.has_section_key("bindings", "scrub") \
+			and not conflicts("scrub", bindings.scrub).is_empty():
+		bindings.scrub = {}
 	_axis_latches.clear()
 	return OK

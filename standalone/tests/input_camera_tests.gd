@@ -35,6 +35,8 @@ func _run() -> void:
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(config_path))
 	var bindings: RefCounted = Bindings.new(false)
 	check(bindings.describe("camera") == "B / Circle", "camera has accessible default button")
+	check(bindings.describe("scrub") == "X / Square" and "scrub" in bindings.ACTIONS
+		and "hold" in str(bindings.LABELS.scrub), "scrub has a customizable continuous Xbox X default")
 	check(bindings.axis_strength(0.08, bindings.bindings.steer_right) == 0.0, "stick drift stays inside deadzone")
 	check(is_equal_approx(float(bindings.axis_strength(-1.0, bindings.bindings.steer_left)), 1.0), "left directional axis has full range")
 	check(bindings.axis_strength(-1.0, bindings.bindings.steer_right) == 0.0, "axis opposite direction does not actuate")
@@ -59,6 +61,7 @@ func _run() -> void:
 	var reload: RefCounted = Bindings.new(false)
 	check(reload.load_file(path) == OK and reload.bindings.throttle == bindings.bindings.throttle and is_equal_approx(float(reload.deadzone), 0.22), "binding and deadzone survive reload")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	_scrub_migration_regressions()
 	bindings.reset_defaults()
 	check(bindings.describe("throttle") == "RT / R2 +" and is_equal_approx(float(bindings.deadzone), 0.14), "reset restores controller layout and deadzone")
 	check(not "feet" in bindings.ACTIONS and not bindings.bindings.has("feet"), "automatic feet removes the manual feet action from controller bindings")
@@ -71,6 +74,7 @@ func _run() -> void:
 	check(bindings.action_for_event(joy_axis(4, JOY_AXIS_LEFT_Y, -1.0), 4) == "upshift", "return crossing re-arms command without resting frame")
 	var rider: RefCounted = RiderInput.new()
 	check(not InputMap.has_action("mx_feet"), "automatic feet removes the legacy keyboard feet action")
+	_scrub_input_regressions(rider)
 	rider.controller_bindings = bindings
 	rider.select_controller(4)
 	rider.note_event(joy_button(7, JOY_BUTTON_A))
@@ -165,6 +169,82 @@ func _run() -> void:
 	print("Input / camera regression: %d checks, %d failures" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
 
+func _scrub_migration_regressions() -> void:
+	var legacy := ConfigFile.new()
+	legacy.set_value("controller", "version", 1)
+	legacy.set_value("bindings", "camera", {"kind": "button", "index": JOY_BUTTON_X, "direction": 1})
+	var legacy_path := "user://scrub_legacy_binding_test.cfg"
+	var map: RefCounted = Bindings.new(false)
+	check(legacy.save(legacy_path) == OK and map.load_file(legacy_path) == OK
+		and map.describe("camera") == "X / Square" and map.bindings.scrub.is_empty(),
+		"migration preserves a saved Xbox X mapping and leaves new scrub action unbound")
+	legacy.set_value("bindings", "camera", {"kind": "button", "index": JOY_BUTTON_B, "direction": 1})
+	map.reset_defaults()
+	check(legacy.save(legacy_path) == OK and map.load_file(legacy_path) == OK
+		and map.describe("scrub") == "X / Square", "old layout adds scrub default when Xbox X is free")
+	map.assign("scrub", {"kind": "axis", "index": JOY_AXIS_LEFT_Y, "direction": 1})
+	check(map.save_file(legacy_path) == OK and map.load_file(legacy_path) == OK
+		and map.bindings.scrub == {"kind": "axis", "index": JOY_AXIS_LEFT_Y, "direction": 1},
+		"analog scrub remapping survives save and reload")
+	map.assign("scrub", {})
+	check(map.save_file(legacy_path) == OK and map.load_file(legacy_path) == OK
+		and map.bindings.scrub.is_empty(), "explicitly unbound scrub remains unbound after reload")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy_path))
+
+func _scrub_input_regressions(rider: RefCounted) -> void:
+	var keyboard_f := false
+	for event: InputEvent in InputMap.action_get_events("mx_scrub"):
+		keyboard_f = keyboard_f or (event is InputEventKey and event.physical_keycode == KEY_F)
+	check(keyboard_f and not InputMap.has_action("mx_feet"),
+		"F maps to continuous scrub while the manual foot action remains absent")
+	rider.controller_active = false
+	Input.action_press("mx_scrub")
+	var held: Dictionary = rider.tick(1.0 / 240.0, true)
+	check(float(held.scrub) == 1.0 and bool(held.footDown) and not bool(held.standing),
+		"held keyboard scrub reaches the riding packet without changing feet or posture")
+	check(float(rider.tick(1.0 / 240.0, false).scrub) == 0.0,
+		"disabled riding releases scrub instead of leaving an armed gesture")
+	rider.reset_for_recovery()
+	check(float(rider.tick(1.0 / 240.0, true).scrub) == 0.0,
+		"recovery blocks a held scrub key until it is released")
+	Input.action_release("mx_scrub")
+	rider.tick(1.0 / 240.0, true)
+	Input.action_press("mx_scrub")
+	check(float(rider.tick(1.0 / 240.0, true).scrub) == 1.0,
+		"released and pressed scrub key rearms normally after recovery")
+	Input.action_release("mx_scrub")
+	rider.release_controls()
+	var map: RefCounted = Bindings.new(false)
+	rider.controller_bindings = map
+	rider.select_controller(4)
+	Input.parse_input_event(joy_button(4, JOY_BUTTON_X))
+	Input.flush_buffered_events()
+	check(is_equal_approx(float(rider._pad_strength("scrub")), 1.0)
+		and rider.command(joy_button(4, JOY_BUTTON_X)).is_empty(),
+		"selected Xbox X supplies continuous scrub strength without a one-shot command")
+	var released := joy_button(4, JOY_BUTTON_X)
+	released.pressed = false
+	Input.parse_input_event(released)
+	Input.parse_input_event(joy_button(7, JOY_BUTTON_X))
+	Input.flush_buffered_events()
+	check(float(rider._pad_strength("scrub")) == 0.0,
+		"secondary controller cannot supply selected rider scrub")
+	var other_released := joy_button(7, JOY_BUTTON_X)
+	other_released.pressed = false
+	Input.parse_input_event(other_released)
+	map.assign("scrub", {"kind": "axis", "index": JOY_AXIS_LEFT_Y, "direction": 1})
+	Input.parse_input_event(joy_axis(4, JOY_AXIS_LEFT_Y, 0.5))
+	Input.flush_buffered_events()
+	var partial: float = rider._pad_strength("scrub")
+	check(partial > 0.4 and partial < 0.5,
+		"remapped analog scrub supplies progressive strength through the existing deadzone")
+	Input.parse_input_event(joy_axis(4, JOY_AXIS_LEFT_Y, 0.0))
+	Input.flush_buffered_events()
+	rider.scrub = 0.7
+	rider.release_controls()
+	check(float(rider.packet().scrub) == 0.0, "control release clears stored scrub axis")
+	rider.controller_active = false
+
 func _rider_twist_visual_regressions(game: Node3D) -> void:
 	var visual: Node3D = game.bike._rider_visual
 	var center := Vector3(0.0, 0.54, 0.09)
@@ -216,11 +296,14 @@ func _chase_input_regressions(game: Node3D) -> void:
 	var original_distance: float = game.orbit_distance
 	game.rider_input.select_controller(4)
 	game.rider_input.controller_bindings.reset_defaults()
-	check(game.rider_input.command(joy_button(4, JOY_BUTTON_X)).is_empty(), "legacy Xbox X button no longer toggles feet")
+	check(game.rider_input.command(joy_button(4, JOY_BUTTON_X)).is_empty()
+		and game.rider_input.controller_bindings.action_for_event(joy_button(4, JOY_BUTTON_X), 4) == "scrub",
+		"Xbox X is a held scrub input and cannot toggle feet")
 	var legacy_feet_key := InputEventKey.new()
 	legacy_feet_key.physical_keycode = KEY_F
 	legacy_feet_key.pressed = true
-	check(game.rider_input.command(legacy_feet_key).is_empty(), "legacy F key no longer toggles feet")
+	check(game.rider_input.command(legacy_feet_key).is_empty()
+		and legacy_feet_key.is_action_pressed("mx_scrub"), "F is a held scrub input and cannot toggle feet")
 	var target: Vector3 = body.global_position + Vector3.UP * 0.65
 	var unobstructed: Transform3D = game.camera_target_transform()
 	check(unobstructed.origin.distance_to(target) > 4.0, "chase ray fixture begins clear of terrain")
