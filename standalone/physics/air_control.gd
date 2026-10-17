@@ -6,12 +6,14 @@ extends RefCounted
 ## never a world attitude, heading, transform, velocity or flight trajectory.
 ## The published torque/power budget is gameplay assistance, not a claim that
 ## a real rider can apply an external torque to an unsupported motorcycle.
+## Strength scales only that extra budget. Virtual rider intent/perception
+## remains consistent at zero; direct mode disables the complete virtual task.
 
 # Rates are rad/s; response, delay and handoff values are seconds. Torque
 # limits are N m and power limits are watts. Speed thresholds are m/s; the
 # remaining strengths/travel/response scales are dimensionless controls.
 const DEFAULTS := {
-	"Strength": 1.0,
+	"Strength": 1.0, "NeutralDampingStrength": 0.0,
 	"PitchRate": 1.1, "RollRate": 1.4, "YawRate": 1.3,
 	"RateResponse": 0.20, "InputResponse": 0.025,
 	"NeutralDampingTime": 0.55, "ActivationDelay": 0.015,
@@ -83,14 +85,17 @@ func update(frame: Dictionary, controls: Dictionary, dt: float, cfg: Dictionary 
 	var side := clampf(float(controls.get("bodySide", 0.0)), -1.0, 1.0)
 	var forward := clampf(float(controls.get("bodyForward", 0.0)), -1.0, 1.0)
 	var lean := clampf(float(controls.get("lean", 0.0)), -1.0, 1.0)
+	# Positive side input requests rightward bike yaw (-localY). The torso
+	# must twist +localY so its paired hip reaction helps that yaw. Giving
+	# torso twist the same sign as the bike torque makes the two tasks fight.
 	var result := {"active": false, "torque": Vector3.ZERO,
 		"localTorque": Vector3.ZERO, "targetRate": Vector3.ZERO,
 		"powerWatts": 0.0, "blend": 0.0,
 		"barRequest": -steer, "bodySideRequest": -side,
-		"riderLeanRequest": -lean, "twistRequest": -side,
+		"riderLeanRequest": -lean, "twistRequest": side,
 		"pitchPoseRequest": clampf(float(frame.get("bodyReference", 0.0))
 			- forward * _value(cfg, "PitchTravel"), -1.0, 1.0)}
-	if not bool(frame.get("enabled", false)) or strength <= 0.0 or dt <= 0.0:
+	if not bool(frame.get("enabled", false)) or dt <= 0.0:
 		reset()
 		return result
 	var grounded := bool(frame.get("grounded", true))
@@ -124,16 +129,25 @@ func update(frame: Dictionary, controls: Dictionary, dt: float, cfg: Dictionary 
 		if target[axis] * omega[axis] < -0.02:
 			target[axis] *= maxf(1.0, _value(cfg, "WhipRecovery")) if axis > 0 else 1.0
 	var response := maxf(0.02, _value(cfg, "RateResponse"))
-	if requested.length_squared() < 0.0004:
-		response = maxf(response, _value(cfg, "NeutralDampingTime"))
-	var acceleration := basis * ((target - omega) / response)
+	var neutral_strength := clampf(_value(cfg, "NeutralDampingStrength"), 0.0, 1.0)
+	var acceleration_local := Vector3.ZERO
+	for axis: int in range(3):
+		var axis_response := response if absf(requested[axis]) >= 0.02 else maxf(response, _value(cfg, "NeutralDampingTime"))
+		acceleration_local[axis] = (target[axis] - omega[axis]) / axis_response
+	var acceleration := basis * acceleration_local
 	var tensor := assembly_tensor(frame.get("bodies", []))
 	var torque := basis.transposed() * (tensor * acceleration)
 	var limits := Vector3(maxf(0.0, _value(cfg, "MaxPitchTorque")),
 		maxf(0.0, _value(cfg, "MaxYawTorque")), maxf(0.0, _value(cfg, "MaxRollTorque")))
 	for axis: int in range(3):
 		torque[axis] = clampf(torque[axis], -limits[axis], limits[axis])
+		if absf(requested[axis]) < 0.02:
+			torque[axis] *= neutral_strength
 	torque = torque.limit_length(maxf(0.0, _value(cfg, "MaxTotalTorque"))) * strength * activation
+	# A centred stick releases the air task. The existing internal rider,
+	# wheel/brake reactions and aerodynamic drag retain their native dynamics;
+	# the default task cannot erase takeoff momentum by targeting zero rate.
+	# Optional arcade damping is explicit and separate from active air control.
 	var world_torque := basis * torque
 	var power := world_torque.dot(omega_world)
 	var power_limit := maxf(0.0, _value(cfg, "MaxPower") if power >= 0.0 else _value(cfg, "MaxDissipationPower")) * strength
@@ -141,7 +155,7 @@ func update(frame: Dictionary, controls: Dictionary, dt: float, cfg: Dictionary 
 		world_torque *= power_limit / absf(power)
 		torque = basis.transposed() * world_torque
 		power = world_torque.dot(omega_world)
-	result.active = activation > 0.0
+	result.active = activation > 0.0 and strength > 0.0
 	result.torque = world_torque
 	result.localTorque = torque
 	result.targetRate = target

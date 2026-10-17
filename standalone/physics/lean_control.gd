@@ -5,6 +5,16 @@ extends RefCounted
 ## crosses its target. This replaces an overdamped angle spring, not native
 ## roll, contact, inertia, gyroscopes, or the fork bearing.
 
+static func heading_bank(error: float, speed: float, response: float,
+		maximum_bank: float) -> float:
+	# The outer task requests curvature of the centre-of-mass travel direction.
+	# A front bar countersteer initially yaws the chassis away from the eventual
+	# corner. Differentiating that body yaw in this task creates positive
+	# feedback through the finite roll actuator. Course error alone asks for
+	# a finite turn; the inner measured-bank/rate task supplies the damping.
+	return clampf(atan(maxf(speed, 0.0) * maxf(response, 0.0) * error / 9.81),
+		-absf(maximum_bank), absf(maximum_bank))
+
 static func target(lean: float, target_lean: float, bank_rate: float,
 		speed: float, height: float, wheelbase: float, max_angle: float,
 		recovering: bool, tune: Dictionary) -> Dictionary:

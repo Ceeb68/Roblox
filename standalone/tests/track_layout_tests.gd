@@ -186,7 +186,8 @@ func _test_ordered_gates(track: Dictionary) -> void:
 		"A shortcut through the former south turn skips mandatory distant checkpoints")
 
 
-func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: Dictionary) -> void:
+func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: Dictionary,
+		recover_backward_landing: bool = true) -> void:
 	if is_instance_valid(bike):
 		bike.queue_free()
 		await _tick()
@@ -198,6 +199,8 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 	var finish: float = lip + float(recipe.deck) + float(recipe.landing)
 	var height: float = recipe.height
 	var title := "%.1f m jump / %.0f m/s approach / body %.2f" % [height, speed, body_forward]
+	var deliberate_powered_wheelie := body_forward < 0.0 and not recover_backward_landing
+	title += " / held rearward power" if deliberate_powered_wheelie else (" / touchdown throttle recovery" if body_forward < 0.0 else "")
 	bike.reset_bike(Transform3D(Basis(Vector3.UP, PI), Vector3(46.0, 0.95, start)))
 	bike.set_controls({"clutch": 1.0, "footDown": true, "standing": true, "bodyForward": body_forward})
 	# Let all five native bodies reach their actual standing support posture
@@ -231,6 +234,9 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 	var landed := false
 	var supported_after_landing := false
 	var max_bank := 0.0
+	var max_pitch := 0.0
+	var recovery_applied := false
+	var rear_only_after_landing := 0
 	var peak_height := 0.0
 	var max_front := 0.0
 	var max_rear := 0.0
@@ -239,12 +245,20 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 	var samples: Array[Dictionary] = []
 	for i in range(2400):
 		var time := float(i) / HZ
-		bike.set_controls({"throttle": 0.5, "clutch": maxf(0.0, 1.0 - time / 0.75),
+		var prior: Dictionary = bike.get_telemetry()
+		if recover_backward_landing and body_forward < 0.0 and flew and bike.chassis.global_position.z > lip \
+				and (float(prior.frontLoad) > 1.0 or float(prior.rearLoad) > 1.0):
+			# The test PILOT releases actual throttle after a rearward air input
+			# and rear-wheel touchdown. Production physics never inserts this
+			# recovery: holding power/rearward input is tested separately below.
+			recovery_applied = true
+		bike.set_controls({"throttle": 0.0 if recovery_applied else 0.5, "clutch": maxf(0.0, 1.0 - time / 0.75),
 			"footDown": false, "standing": true, "bodyForward": body_forward})
 		await _tick()
 		var state: Dictionary = bike.get_telemetry()
 		var position: Vector3 = bike.chassis.global_position
 		max_bank = maxf(max_bank, absf(float(state.roll)))
+		max_pitch = maxf(max_pitch, float(state.pitch))
 		peak_height = maxf(peak_height, position.y)
 		max_front = maxf(max_front, float(state.frontCompression))
 		max_rear = maxf(max_rear, float(state.rearCompression))
@@ -265,6 +279,8 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 			air_frames = 0
 		if landed and float(state.frontLoad) > 100.0 and float(state.rearLoad) > 100.0:
 			supported_after_landing = true
+		if landed and float(state.rearLoad) > 1.0 and float(state.frontLoad) <= 1.0:
+			rear_only_after_landing += 1
 		if i % 24 == 0:
 			samples.append({"time": time, "position": str(position), "x": position.x, "z": position.z,
 				"velocity": str(bike.chassis.linear_velocity), "heading": str(-bike.chassis.global_basis.z),
@@ -281,15 +297,25 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 	_check(flew and float(longest_air) / HZ > 0.8 and peak_height > height + 0.7,
 		title + " launches through actual contact into measurable flight",
 		"air=%.3f s peak chassis=%.3f m" % [float(longest_air) / HZ, peak_height])
-	_check(landed and supported_after_landing,
-		title + " lands and restores real support at both independent tires")
-	_check(not bike.crashed and final_position.z > finish + 14.0,
-		title + " reaches the physical landing and full runout without recovery",
-		"position=%s reason=%s" % [final_position, bike.crash_reason])
-	_check(max_bank < deg_to_rad(45.0), title + " avoids excessive uncommanded bank",
-		"maximum=%.2f degrees" % rad_to_deg(max_bank))
-	_check(min_corridor_clearance > 0.45, title + " remains within the prepared road and soft shoulder",
-		"minimum outer-edge clearance=%.3f m; max lane deviation=%.3f m" % [min_corridor_clearance, max_lane_error])
+	if deliberate_powered_wheelie:
+		_check(landed and bike.crashed and bike.crash_reason == "Wheelie loop-out",
+			title + " produces a physically justified powered loop-out",
+			"position=%s reason=%s" % [final_position, bike.crash_reason])
+		_check(max_pitch > deg_to_rad(70.0) and rear_only_after_landing > roundi(0.20 * HZ),
+			title + " actually lifts the front and over-rotates after sustained rear-only support",
+			"pitch=%.2f degrees rear-only=%.3f s" % [rad_to_deg(max_pitch), float(rear_only_after_landing) / HZ])
+	else:
+		_check(landed and supported_after_landing,
+			title + " lands and restores real support at both independent tires")
+		_check(not bike.crashed and final_position.z > finish + 14.0,
+			title + " reaches the physical landing and full runout without recovery",
+			"position=%s reason=%s" % [final_position, bike.crash_reason])
+		_check(max_bank < deg_to_rad(45.0), title + " avoids excessive uncommanded bank",
+			"maximum=%.2f degrees" % rad_to_deg(max_bank))
+		_check(min_corridor_clearance > 0.45, title + " remains within the prepared road and soft shoulder",
+			"minimum outer-edge clearance=%.3f m; max lane deviation=%.3f m" % [min_corridor_clearance, max_lane_error])
+		if body_forward < 0.0:
+			_check(recovery_applied, title + " uses the pilot's real throttle release at positive touchdown load")
 	_check(max_front < float(cfg.Suspension.Front.Travel) + 0.04 and
 		max_rear < float(cfg.Suspension.Rear.Travel) + 0.04,
 		title + " lands within the independent shocks' mechanical travel",
@@ -300,6 +326,9 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 			body.linear_velocity.is_finite() and body.angular_velocity.is_finite())
 	_check(bodies_finite, title + " leaves all five native bodies finite")
 	jump_reports.append({"profile": physics_profile, "height": height, "approachSpeed": speed, "bodyForward": body_forward,
+		"expectation": "powered-loop-out" if deliberate_powered_wheelie else "landing-runout",
+		"touchdownThrottleRecovery": recovery_applied, "peakPitchDeg": rad_to_deg(max_pitch),
+		"rearOnlyAfterLandingSeconds": float(rear_only_after_landing) / HZ,
 		"longestAir": float(longest_air) / HZ, "peakHeight": peak_height,
 		"maxBank": rad_to_deg(max_bank), "maxLaneError": max_lane_error,
 		"minCorridorClearance": min_corridor_clearance, "maxFrontTravel": max_front,
@@ -317,6 +346,9 @@ func _test_native_powered_jumps() -> void:
 		for body_forward in [0.0, 0.15, -0.15]:
 			for speed in [20.0, 21.0, 22.0]:
 				await _powered_jump(recipe, speed, body_forward, cfg)
+	# Skill-based riding retains a physical consequence for holding a rearward
+	# pitch command and drive through a nose-up, rear-wheel-first touchdown.
+	await _powered_jump(Track.EXTENSION_JUMPS[0], 22.0, -0.15, cfg, false)
 	var max_bank := 0.0
 	var min_air := INF
 	var max_air := 0.0

@@ -17,6 +17,7 @@ class ObservedBike:
 			"torque": _landing_assist_torque,
 			"localTorque": chassis.global_basis.transposed() * _landing_assist_torque,
 			"bank": _angles().x, "bankRate": _bank_rate(),
+			"pitchRate": chassis.angular_velocity.dot(chassis.global_basis.x),
 			"leanRateTarget": _lean_rate_target, "bodyForward": float(input.bodyForward),
 			"mode": riding_mode, "crashed": crashed})
 
@@ -42,7 +43,7 @@ func _check(condition: bool, label: String, detail := "") -> void:
 		push_error("LANDING ASSIST FAIL: " + failures[-1])
 
 func _fixture(pitch: float, bank: float, strength := 1.0, landing_strength := 1.0,
-		mode := "virtual_rider", body_forward := 0.0, steer := 0.0) -> void:
+		mode := "virtual_rider", body_forward := 0.0, steer := 0.0, pitch_stiffness := -1.0) -> void:
 	if is_instance_valid(world):
 		world.queue_free()
 		await process_frame
@@ -66,6 +67,8 @@ func _fixture(pitch: float, bank: float, strength := 1.0, landing_strength := 1.
 	setup.Assistance.LandingStrength = landing_strength
 	setup.Assistance.LowSpeedStrength = 0.0
 	setup.AirControl.Strength = 0.0
+	if pitch_stiffness >= 0.0:
+		setup.Assistance.LandingPitchStiffness = pitch_stiffness
 	bike = ObservedBike.new()
 	bike.configure(setup)
 	world.add_child(bike)
@@ -88,8 +91,9 @@ func _fixture(pitch: float, bank: float, strength := 1.0, landing_strength := 1.
 	bike.aid_observations.clear()
 
 func _native_case(label: String, pitch: float, bank: float, strength := 1.0,
-		landing_strength := 1.0, mode := "virtual_rider", body_forward := 0.0, steer := 0.0) -> Dictionary:
-	await _fixture(pitch, bank, strength, landing_strength, mode, body_forward, steer)
+		landing_strength := 1.0, mode := "virtual_rider", body_forward := 0.0, steer := 0.0,
+		pitch_stiffness := -1.0) -> Dictionary:
+	await _fixture(pitch, bank, strength, landing_strength, mode, body_forward, steer, pitch_stiffness)
 	var duration := float(bike.config.Assistance.get("LandingTime", 0.65))
 	for _i in range(roundi((duration + 1.3) * HZ)):
 		await _tick()
@@ -99,6 +103,7 @@ func _native_case(label: String, pitch: float, bank: float, strength := 1.0,
 	var maximum_torque := 0.0
 	var maximum_pitch := 0.0
 	var maximum_roll := 0.0
+	var positive_pitch_work_rate := 0.0
 	var maximum_yaw := 0.0
 	var unsupported_torque := 0.0
 	var window_excess := 0.0
@@ -120,6 +125,7 @@ func _native_case(label: String, pitch: float, bank: float, strength := 1.0,
 	var expired_supported := false
 	for observation: Dictionary in bike.aid_observations:
 		var torque: Vector3 = observation.localTorque
+		positive_pitch_work_rate = maxf(positive_pitch_work_rate, torque.x * float(observation.pitchRate))
 		finite = finite and torque.is_finite() and is_finite(float(observation.remaining))
 		maximum_torque = maxf(maximum_torque, torque.length())
 		maximum_pitch = maxf(maximum_pitch, absf(torque.x))
@@ -187,11 +193,16 @@ func _native_case(label: String, pitch: float, bank: float, strength := 1.0,
 		_check(maximum_torque == 0.0, label + " explicitly bypasses optional landing assistance")
 	if absf(body_forward) >= 0.999:
 		_check(endpoint_pitch < 0.0001, label + " full manual fore/aft input bypasses pitch correction")
-	elif enabled and absf(pitch) > deg_to_rad(10.0):
+	elif enabled and float(bike.config.Assistance.get("LandingPitchStiffness", 0.0)) > 0.0 and absf(pitch) > deg_to_rad(10.0):
 		_check(maximum_pitch > 5.0, label + " actually exercises the terrain-relative pitch catch")
+	if enabled and float(bike.config.Assistance.get("LandingPitchStiffness", 0.0)) == 0.0:
+		_check(positive_pitch_work_rate < 0.0001,
+			label + " default pitch damping dissipates rotation instead of seeking an upright pose", str(positive_pitch_work_rate))
 	var report := {"label": label, "firstLoadedFrame": first_loaded, "firstActiveFrame": first_active,
 		"lastActiveFrame": last_active, "peakTorqueNm": maximum_torque,
 		"peakPitchTorqueNm": maximum_pitch, "peakRollTorqueNm": maximum_roll,
+		"positivePitchWorkRateWatts": positive_pitch_work_rate,
+		"pitchStiffness": float(bike.config.Assistance.get("LandingPitchStiffness", 0.0)),
 		"frontObserved": real_front, "rearObserved": real_rear, "frontFirst": front_first,
 		"rearFirst": rear_first, "rollTaskSamples": roll_task_samples,
 		"windows": window_count, "continuedGapFrames": continued_gap_frames,
@@ -241,6 +252,8 @@ func _run() -> void:
 	await _native_case("Global assistance off", deg_to_rad(8), deg_to_rad(4), 0.0)
 	await _native_case("Landing assistance off", deg_to_rad(-8), deg_to_rad(-4), 1.0, 0.0)
 	await _native_case("Combined partial strengths", deg_to_rad(20), deg_to_rad(16), 0.5, 0.5)
+	await _native_case("Optional arcade pitch spring", deg_to_rad(20), deg_to_rad(6),
+		1.0, 1.0, "virtual_rider", 0.0, 0.0, 200.0)
 	await _native_case("Direct mode", deg_to_rad(8), deg_to_rad(4), 1.0, 1.0, "direct")
 	var native_gap_samples := 0
 	for report: Dictionary in reports:

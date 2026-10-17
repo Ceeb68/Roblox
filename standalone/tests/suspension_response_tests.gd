@@ -127,12 +127,24 @@ func _case(kind: String, height: float, standing: bool, linear: bool) -> Diction
 		feet_driver.standing = standing
 		feet_driver.foot_down = false
 	var first_touch_feet_down := false
+	var boot_enables := 0
+	var boot_enable_clearance := INF
+	var previous_boot_disabled: Array[bool] = [bike._feet[0].disabled, bike._feet[1].disabled]
 	for i: int in range(int((5.0 if bumps else 4.0) * hz)):
 		if feet_driver != null:
 			feet_driver.update_auto_feet(1.0 / hz, bike.get_telemetry())
 			bike.set_controls(feet_driver.packet())
 		await _tick()
 		var t: Dictionary = bike.get_telemetry()
+		if feet_driver != null:
+			for index: int in range(2):
+				var foot: CollisionShape3D = bike._feet[index]
+				if previous_boot_disabled[index] and not foot.disabled:
+					var capsule := foot.shape as CapsuleShape3D
+					var world_extent := capsule.radius + (capsule.height * 0.5 - capsule.radius) * absf(foot.global_basis.y.y)
+					boot_enable_clearance = minf(boot_enable_clearance, foot.global_position.y - world_extent)
+					boot_enables += 1
+				previous_boot_disabled[index] = foot.disabled
 		var f: Dictionary = bike.front_suspension_state
 		var r: Dictionary = bike.rear_suspension_state
 		peak_front = maxf(peak_front, float(f.compression))
@@ -175,7 +187,7 @@ func _case(kind: String, height: float, standing: bool, linear: bool) -> Diction
 		native_contact_ticks += int(bike.front_wheel.native_contact_count > 0 or bike.rear_wheel.native_contact_count > 0)
 		if i % int(hz * .05) == 0:
 			samples.append({"t": float(i)/hz,"y":bike.chassis.global_position.y,"z":bike.chassis.global_position.z,"vy":bike.chassis.linear_velocity.y,"front":f.duplicate(),"rear":r.duplicate(),"pitch":t.pitch,"roll":t.roll,"load":float(t.frontLoad)+float(t.rearLoad)})
-	var result := {"profile":physics_profile,"kind":kind,"height":height,"standing":standing,"linearDamping":linear,"hz":hz,"frontTravel":peak_front,"rearTravel":peak_rear,"peakShaftSpeed":peak_rate,"peakForce":peak_force,"peakChassisAccel":peak_accel,"peakImpactAccel":peak_impact_accel,"peakPitchDeg":rad_to_deg(peak_pitch),"peakRollDeg":rad_to_deg(peak_roll),"peakLoad":peak_load,"compressionDissipation":compression_work,"reboundDissipation":rebound_work,"airborneTicks":airborne_ticks,"loadedTicks":loaded_ticks,"bounceHeight":bounce_height,"settledAfter":settled_at,"finalSpeed":bike.chassis.linear_velocity.length(),"crashed":bike.crashed,"reason":bike.crash_reason,"minimumDamperPower":minimum_damper_power,"nativeContactTicks":native_contact_ticks,"samples":samples,"automaticFeet":feet_driver!=null,"firstTouchFootDown":first_touch_feet_down,"finalFootDown":bool(bike.controls.footDown)}
+	var result := {"profile":physics_profile,"kind":kind,"height":height,"standing":standing,"linearDamping":linear,"hz":hz,"frontTravel":peak_front,"rearTravel":peak_rear,"peakShaftSpeed":peak_rate,"peakForce":peak_force,"peakChassisAccel":peak_accel,"peakImpactAccel":peak_impact_accel,"peakPitchDeg":rad_to_deg(peak_pitch),"peakRollDeg":rad_to_deg(peak_roll),"peakLoad":peak_load,"compressionDissipation":compression_work,"reboundDissipation":rebound_work,"airborneTicks":airborne_ticks,"loadedTicks":loaded_ticks,"bounceHeight":bounce_height,"settledAfter":settled_at,"finalSpeed":bike.chassis.linear_velocity.length(),"crashed":bike.crashed,"reason":bike.crash_reason,"minimumDamperPower":minimum_damper_power,"nativeContactTicks":native_contact_ticks,"samples":samples,"automaticFeet":feet_driver!=null,"firstTouchFootDown":first_touch_feet_down,"finalFootDown":bool(bike.controls.footDown),"bootEnables":boot_enables,"bootEnableClearance":boot_enable_clearance if boot_enables>0 else 0.0}
 	results.append(result)
 	var summary := result.duplicate()
 	summary.erase("samples")
@@ -267,6 +279,10 @@ func _run() -> void:
 				_check(float(candidate.peakRollDeg) < (4.0 if kind == "drop" else 12.0),label + " avoids an uncommanded suspension-induced fall")
 				if kind == "drop":
 					_check(not bool(candidate.firstTouchFootDown),label + " first impact is absorbed without support-foot collision")
+					_check(int(candidate.bootEnables) >= 2 and float(candidate.bootEnableClearance) >= -0.01,
+						label + " automatic boot deployment enables clear geometry instead of penetrating soil")
+					_check(float(candidate.peakChassisAccel) <= float(candidate.peakImpactAccel) + 10.0,
+						label + " stopped boot planting cannot add a delayed chassis catapult after suspension absorption")
 				if kind == "bumps":
 					_check(float(candidate.finalSpeed) >= float(baseline.finalSpeed)*0.97,label + " does not obtain comfort by adding rolling drag")
 	var path := "res://build/suspension-response-report-%d-%d.json" % [int(hz),OS.get_process_id()]

@@ -32,6 +32,8 @@ var _built: bool = false
 var _compression_pose: float = 0.0
 var _acceleration_pose: float = 0.0
 var _support_pose := Vector2(1.0, 0.0)
+var _support_boot_targets: Array[Vector3] = [Vector3(-0.340, -0.635, 0.020), Vector3(0.340, -0.635, 0.020)]
+var _support_boot_velocities: Array[Vector3] = [Vector3.ZERO, Vector3.ZERO]
 var _standing_pose := Vector2.ZERO
 var _corner_pose := Vector2.ZERO
 var _pose_initialized := false
@@ -166,6 +168,7 @@ func update_pose(body_forward: float, body_side: float, lean: float, standing: f
 	var physical_motion = _physical_rider_motion(riding_state)
 	var follows_physical_body := physical_motion is Transform3D
 	var dt := clampf(float(riding_state.get("dt", 1.0 / 240.0)), 0.0, 0.1)
+	_update_support_boot_targets(feet_down, riding_state, dt)
 	_update_animation_state(standing, feet_down, riding_state, dt)
 	var support := _support_pose.x
 	var stand := _standing_pose.x * (1.0 - support)
@@ -359,6 +362,27 @@ func _inside_leg_weight(side: float) -> float:
 	# phase changes side. Only one cornering leg can be extended at a time.
 	return smoothstep(0.0, 1.0, clampf(_corner_pose.x * side, 0.0, 1.0))
 
+func _update_support_boot_targets(feet_down: bool, riding_state: Dictionary, dt: float) -> void:
+	var targets: Variant = riding_state.get("support_boot_targets", [])
+	if not feet_down or not targets is Array or targets.size() != 2:
+		return # Keep the last planted endpoints while blending back to the pegs.
+	for i: int in range(2):
+		if not targets[i] is Vector3 or not (targets[i] as Vector3).is_finite():
+			continue
+		var target: Vector3 = targets[i]
+		if bool(riding_state.get("pose_reset", false)):
+			_support_boot_targets[i] = target
+			_support_boot_velocities[i] = Vector3.ZERO
+			continue
+		# A critically damped endpoint keeps a half-completed plant/retraction
+		# interruptible. The existing single IK solver still owns all leg joints.
+		var frequency := 2.0 / 0.06
+		var offset := _support_boot_targets[i] - target
+		var coupling := _support_boot_velocities[i] + offset * frequency
+		var decay := exp(-frequency * dt)
+		_support_boot_targets[i] = target + (offset + coupling * dt) * decay
+		_support_boot_velocities[i] = (_support_boot_velocities[i] - coupling * frequency * dt) * decay
+
 func _boot_target(side: float) -> Vector3:
 	var riding := Vector3(side * 0.245, -0.101, 0.087)
 	var extension := _inside_leg_weight(side)
@@ -367,7 +391,7 @@ func _boot_target(side: float) -> Vector3:
 		-_setting("LegOutForwardTravel", 0.0, 0.52)) * extension
 	# One target per boot owns the full transition. This replaces competing
 	# planted/peg/corner animation branches, including interruption mid stride.
-	return riding.lerp(Vector3(side * 0.340, -0.635, 0.020), _support_pose.x)
+	return riding.lerp(_support_boot_targets[0 if side < 0.0 else 1], _support_pose.x)
 
 func get_animation_state() -> Dictionary:
 	return {"support": _support_pose.x, "standing": _standing_pose.x,

@@ -8,6 +8,7 @@ var checks := 0
 func _initialize() -> void:
 	cfg = JSON.parse_string(FileAccess.get_file_as_string("res://config/bike_250f.json")).Tire
 	_axle_isolation()
+	_capability_queries()
 	_directional_budgets()
 	_curve_and_combined_grip()
 	_relaxation_rates()
@@ -84,6 +85,33 @@ func _directional_budgets() -> void:
 	soft.GripScale=.70
 	var soft_result:=evaluate(.2,.1,input_at(12.,2.,15.),soft)
 	near(soft_result.capacityY,920.*.85*.80*.70,0.000001,"Per-axle GripScale scales actual independent capacity")
+
+func _capability_queries() -> void:
+	var tune := settings()
+	tune.GripScale = 0.8
+	tune.LateralGrip = 0.75
+	tune.BrakingGrip = 0.65
+	var surface := {"Grip": 0.85, "Rolling": 0.025}
+	for load_value: float in [0.0, 920.0, 1800.0]:
+		for braking: bool in [false, true]:
+			var limits := Tire.force_limits(load_value, tune, surface, braking)
+			var sample := input_at(12.0, 0.4, 0.0 if braking else 15.0, load_value)
+			var result := evaluate(-0.2 if braking else 0.2, 0.05, sample, tune)
+			near(limits.capacityX, result.capacityX, 0.000000001, "Capability query shares the brush's longitudinal load/soil/axle budget")
+			near(limits.capacityY, result.capacityY, 0.000000001, "Capability query shares the brush's independent lateral budget")
+			near(Tire.available_lateral_force(load_value, 0.0, tune, surface, braking), limits.capacityY, 0.000000001,
+				"No longitudinal demand preserves the full lateral capacity")
+			near(Tire.available_lateral_force(load_value, float(limits.capacityX) * 0.5, tune, surface, braking),
+				float(limits.capacityY) * sqrt(0.75), 0.000000001, "Combined reserve follows the same grip ellipse")
+	var normal := Tire.force_limits(920.0, tune, surface)
+	near(Tire.available_lateral_force(920.0, float(normal.capacityX) * 2.0, tune, surface), 0.0, 0.0,
+		"Excessive drive demand leaves no lateral reserve rather than a negative square root")
+	var no_drive := tune.duplicate(true)
+	no_drive.AccelerationGrip = 0.0
+	near(Tire.available_lateral_force(920.0, 0.0, no_drive, surface), normal.capacityY, 0.000000001,
+		"A zero longitudinal grip axis still permits pure cornering")
+	near(Tire.available_lateral_force(920.0, 1.0, no_drive, surface), 0.0, 0.0,
+		"An impossible longitudinal request on a degenerate ellipse has no combined reserve")
 func _curve_and_combined_grip() -> void:
 	var tune:=settings()
 	var previous:=0.0

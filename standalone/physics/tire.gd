@@ -24,6 +24,37 @@ static func axle_settings(base: Dictionary, axle: String) -> Dictionary:
 static func new_state() -> Dictionary:
 	return {"slipRatio": 0.0, "slipAngle": 0.0, "contact": false}
 
+## One source for an axle's load-sensitive grip ellipse. This pure capability
+## query is shared by the brush and the virtual rider's feasible bank request;
+## it does not infer normal support or change tire strain.
+static func force_limits(normal_load: float, cfg: Dictionary, surface: Dictionary,
+		braking: bool = false) -> Dictionary:
+	var load := maxf(_finite(normal_load, 0.0), 0.0)
+	if load <= 0.0:
+		return {"surfaceGrip": 0.0, "capacityX": 0.0, "capacityY": 0.0, "grip": 0.0}
+	var reference_load := maxf(_setting(cfg, "ReferenceLoad", 920.0), 1.0)
+	var sensitivity := clampf(_setting(cfg, "LoadSensitivity", 0.0), 0.0, 0.5)
+	var load_factor := clampf((load / reference_load) ** -sensitivity, 0.5, 1.5)
+	var surface_grip := maxf(_finite(float(surface.Grip), 0.0), 0.0) * load_factor * maxf(_setting(cfg, "GripScale", 1.0), 0.0)
+	var longitudinal_grip := maxf(_setting(cfg, "BrakingGrip" if braking else "AccelerationGrip", 1.0), 0.0)
+	var lateral_grip := maxf(_setting(cfg, "LateralGrip", 1.0), 0.0)
+	return {"surfaceGrip": surface_grip, "capacityX": surface_grip * load * longitudinal_grip,
+		"capacityY": surface_grip * load * lateral_grip,
+		"grip": surface_grip * maxf(longitudinal_grip, lateral_grip)}
+
+## Remaining lateral capacity at a specified longitudinal force, in newtons.
+## Callers supply their own deliberate filtering/reference load; instantaneous
+## Fy demand is never fed back into this geometric budget.
+static func available_lateral_force(normal_load: float, longitudinal_force: float,
+		cfg: Dictionary, surface: Dictionary, braking: bool = false) -> float:
+	var limits := force_limits(normal_load, cfg, surface, braking)
+	var force := absf(_finite(longitudinal_force, 0.0))
+	var longitudinal_capacity := float(limits.capacityX)
+	if longitudinal_capacity <= 0.0:
+		return float(limits.capacityY) if force == 0.0 else 0.0
+	var fraction := clampf(force / longitudinal_capacity, 0.0, 1.0)
+	return float(limits.capacityY) * sqrt(maxf(0.0, 1.0 - fraction * fraction))
+
 ## Pure evaluation permits the native contact solver/tests to try a load
 ## without advancing patch strain or altering the other axle's state.
 static func evaluate(state: Dictionary, input: Dictionary, cfg: Dictionary, surface: Dictionary) -> Dictionary:
@@ -49,22 +80,18 @@ static func evaluate(state: Dictionary, input: Dictionary, cfg: Dictionary, surf
 	var limited_slip_work := false
 	var sliding := false
 	if contact:
-		var reference_load := maxf(_setting(cfg, "ReferenceLoad", 920.0), 1.0)
-		var sensitivity := clampf(_setting(cfg, "LoadSensitivity", 0.0), 0.0, 0.5)
-		var load_factor := clampf((load / reference_load) ** -sensitivity, 0.5, 1.5)
-		surface_grip = maxf(_finite(float(surface.Grip), 0.0), 0.0) * load_factor * maxf(_setting(cfg, "GripScale", 1.0), 0.0)
 		var demand_x := load * maxf(_setting(cfg, "LongitudinalStiffness", 0.0), 0.0) * _finite(float(state.slipRatio), 0.0)
 		# The sign of force relative to travel distinguishes acceleration from
 		# braking, including reverse rolling; positive Fx alone does not.
 		var travel := vx if absf(vx) > 0.25 else wheel_speed
 		var braking := demand_x * travel < 0.0
-		var longitudinal_grip := maxf(_setting(cfg, "BrakingGrip" if braking else "AccelerationGrip", 1.0), 0.0)
-		var lateral_grip := maxf(_setting(cfg, "LateralGrip", 1.0), 0.0)
-		capacity_x = surface_grip * load * longitudinal_grip
-		capacity_y = surface_grip * load * lateral_grip
+		var limits := force_limits(load, cfg, surface, braking)
+		surface_grip = float(limits.surfaceGrip)
+		capacity_x = float(limits.capacityX)
+		capacity_y = float(limits.capacityY)
 		# 'grip' remains a conservative enclosing circle for existing telemetry
 		# and force-budget guards. capacityX/Y expose the stricter actual ellipse.
-		grip = surface_grip * maxf(longitudinal_grip, lateral_grip)
+		grip = float(limits.grip)
 		# Rolling camber thrust requires transported tread. A stationary tilted
 		# wheel gains no external sideways support; remembered lateral strain
 		# is still allowed to oppose an existing slide at walking pace.
@@ -133,8 +160,9 @@ static func step(state: Dictionary, input: Dictionary, dt: float, cfg: Dictionar
 	# An exact lateral override requires a contact lever and body state from
 	# the same simulation phase. Raw native world contacts can precede the
 	# solved hub by a step; spinning about that stale lever invents sideslip.
-	# The game therefore uses non-spin transport plus the separate camber law.
-	# Coherent callers can supply lateralSlipVelocity without changing the API.
+	# The game aligns the cached pressure patch with the solved hub and supplies
+	# its full lateral tread velocity. Ideal-contact callers can keep using the
+	# lateralVelocity fallback without changing the API.
 	var target_angle := atan(vy / denominator)
 	var contact: bool = bool(input.contact) and _finite(float(input.normalLoad), 0.0) > 0.0 and radius > 0.0
 	var transport_speed := maxf(maxf(absf(vx), absf(wheel_speed)), minimum_speed)

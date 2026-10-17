@@ -88,9 +88,12 @@ static func build(parent: Node3D) -> Dictionary:
 
 
 static func _build_main_ribbon(parent: Node3D) -> void:
-	# Shared rows keep the collision continuous across changes of material and
-	# obstacles. One indexed mesh/concave collider per surface, not stacked boxes.
+	# Material boundaries must not be collision boundaries. Jolt can remove
+	# triangle edges within one mesh, but not between independent static bodies:
+	# a coplanar soil seam then behaves like a physical edge under a rolling tire.
+	# Keep the visual materials separate and share one welded native road mesh.
 	var rows := _main_rows()
+	var collision_faces := PackedVector3Array()
 	var builders: Dictionary = {}
 	for surface in ["dirt", "sand", "mud", "hardpack", "loam"]:
 		var tool := SurfaceTool.new()
@@ -124,8 +127,22 @@ static func _build_main_ribbon(parent: Node3D) -> void:
 				Vector3(first_width, first_width, second_width))
 			_triangle(tool, b, d, c, surface, first_u1, second_u1, second_u0,
 				Vector3(first_width, second_width, second_width))
+			collision_faces.append_array(PackedVector3Array([a, c, b, b, c, d]))
 	for surface: String in builders:
-		_finish_surface(parent, "Circuit_" + surface, builders[surface], surface)
+		_finish_surface(parent, "Circuit_" + surface, builders[surface], surface, false)
+	var road := StaticBody3D.new()
+	road.name = "Circuit_Collision"
+	road.physics_material_override = _contact_material()
+	road.set_meta("physics_surface", "dirt")
+	road.set_meta("physics_surface_resolver", func(world_point: Vector3) -> String:
+		var point := road.to_local(world_point)
+		return _main_surface(Vector2(point.x, point.z)))
+	var collision := CollisionShape3D.new()
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(collision_faces)
+	collision.shape = shape
+	road.add_child(collision)
+	parent.add_child(road)
 
 
 static func _main_rows() -> Array:
@@ -544,7 +561,8 @@ static func _triangle(tool: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, sur
 		tool.add_vertex(vertex)
 
 
-static func _finish_surface(parent: Node3D, title: String, tool: SurfaceTool, surface: String) -> void:
+static func _finish_surface(parent: Node3D, title: String, tool: SurfaceTool, surface: String,
+		with_collision: bool = true) -> void:
 	tool.generate_normals()
 	tool.index()
 	var mesh := tool.commit()
@@ -559,9 +577,10 @@ static func _finish_surface(parent: Node3D, title: String, tool: SurfaceTool, su
 	visual.mesh = mesh
 	visual.material_override = _vertex_material()
 	body.add_child(visual)
-	var collision := CollisionShape3D.new()
-	collision.shape = mesh.create_trimesh_shape()
-	body.add_child(collision)
+	if with_collision:
+		var collision := CollisionShape3D.new()
+		collision.shape = mesh.create_trimesh_shape()
+		body.add_child(collision)
 
 
 static func _box_surface(parent: Node3D, title: String, location: Vector3, dimensions: Vector3,

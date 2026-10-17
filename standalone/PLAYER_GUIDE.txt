@@ -1,4 +1,4 @@
-DIRTLINE MX / WINDOWS PC / 0.6.0
+DIRTLINE MX / WINDOWS PC / 0.7.0
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
@@ -51,7 +51,7 @@ whip recovery, scrubbing and rider transitions are independently adjustable.
 Apply and ride saves your setup locally. Restore tested defaults loads the
 shipped setup into the menu; apply it to reset your saved handling.
 For more simulation, lower gameplay and air assistance together.
-For more forgiveness, modestly shorten neutral rotational decay and increase
+For more forgiveness, enable a little optional neutral air damping and increase
 whip counter-input. Change one setting at a time; keep tire grip near default.
 U remains the separate suspension spring/compression/rebound/preload menu.
 
@@ -64,8 +64,10 @@ outside of a turn to counterbalance the bike beneath you.
 In the air: left stick controls roll; right stick sideways controls yaw;
 right stick forward pushes the nose down and back pulls it up.
 For a whip, combine roll and sideways body input early in the jump, then apply
-opposite input before landing. Releasing the sticks slows unwanted rotation;
-it does not automatically point the bike at the landing.
+opposite input before landing. Centering the sticks preserves rotation by
+default; use deliberate counter-input to slow it before landing. Optional
+neutral damping is available in Handling setup. There is no automatic
+upright or landing-heading target in the air.
 For a scrub, hold F / controller X while leaning into the rising jump face.
 The rider crouches and absorbs the face through the actual suspension.
 Scrubbing acts before takeoff; it cannot push you down after leaving the ground.
@@ -89,6 +91,11 @@ The rider uses a relaxed seated pose and a higher standing attack stance.
 Hands follow the grips. Boots normally stay on the pegs; the inside leg extends
 through suitable seated turns and retracts smoothly on exit or direction change.
 Standing, support feet and cornering legs blend from their current positions.
+
+PHYSICS TELEMETRY
+F8 toggles speed, lean, steering, wheel loads/slip, suspension and crash data.
+F9 starts/stops a physics CSV recording. The saved path appears on screen.
+Recordings stay on this computer; menus and paused time are not recorded.
 
 THE PROVING GROUND
 The circuit is now about 873 m long with 14 ordered gates. The original 40 m

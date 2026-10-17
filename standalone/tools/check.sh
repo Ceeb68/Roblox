@@ -19,10 +19,15 @@ run_check --headless --fixed-fps 240 --script res://tests/rider_dynamics_tests.g
 run_check --headless --fixed-fps 240 --script res://tests/native_scenarios.gd
 run_check --headless --fixed-fps 240 --script res://tests/contact_load_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/tire_patch_phase_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/terrain_contact_tests.gd
+run_check --headless --fixed-fps 480 --script res://tests/terrain_contact_tests.gd -- --hz=480
+run_check --headless --fixed-fps 240 --script res://tests/contact_damper_tests.gd -- --hz=240
+run_check --headless --fixed-fps 480 --script res://tests/contact_damper_tests.gd -- --hz=480
 run_check --headless --fixed-fps 240 --script res://tests/suspension_response_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/track_layout_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/air_control_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/landing_assistance_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/crash_contact_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/scrub_takeoff_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/landing_control_tests.gd -- --chop
@@ -33,9 +38,11 @@ run_check --headless --fixed-fps 240 --script res://tests/handling_overhaul_test
 run_check --headless --script res://tests/rider_sensor_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/input_camera_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/handling_setup_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/telemetry_recorder_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/rider_animation_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/automated_feet_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/playability_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/steering_transition_tests.gd
 run_check --headless --fixed-fps 30 --script res://tests/render_cadence_tests.gd -- --render-hz=30
 run_check --headless --fixed-fps 240 --script res://tests/render_cadence_tests.gd -- --render-hz=240
 run_check --headless --fixed-fps 240 --script res://tests/controllability_tests.gd

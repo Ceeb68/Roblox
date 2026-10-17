@@ -126,7 +126,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 			"normal": normal, "velocity": state.get_contact_collider_velocity_at_position(i),
 			"normalImpulse": normal_impulse, "collider": state.get_contact_collider_id(i),
 			"shape": state.get_contact_collider_shape(i), "static": collider is StaticBody3D,
-			"surface": str(collider.get_meta("physics_surface", collider.get_meta("surface", "dirt"))).to_lower()})
+			"surface": surface_at(collider, state.get_contact_collider_position(i))})
 	contact = native_contact_count > 0
 	if contact:
 		var support := reduce_contact_samples(samples, state.step)
@@ -139,6 +139,18 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		estimated_manifold_count = int(support.manifolds)
 		support_patch_count = int(support.patches)
 	_observe_solved_load(state)
+
+## A continuous collision mesh may contain several soils. Resolve the material
+## at its native WORLD support point without splitting that mesh into edges.
+## Ordinary bodies retain the existing metadata fallback.
+static func surface_at(collider: Object, world_point: Vector3) -> String:
+	var fallback := str(collider.get_meta("physics_surface", collider.get_meta("surface", "dirt"))).to_lower()
+	var resolver: Variant = collider.get_meta("physics_surface_resolver") if collider.has_meta("physics_surface_resolver") else null
+	if resolver is Callable and (resolver as Callable).is_valid() and world_point.is_finite():
+		var result: Variant = (resolver as Callable).call(world_point)
+		if result is String and not (result as String).is_empty():
+			return (result as String).to_lower()
+	return fallback
 
 static func _contains_point(points: Array, position: Vector3) -> bool:
 	for sample: Dictionary in points:

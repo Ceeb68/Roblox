@@ -28,6 +28,23 @@ func _run() -> void:
 	check(input.foot_down and not input.standing, "first mount is seated with supporting feet")
 	advance(input, 0.7, state(0.0))
 	check(input.foot_down, "stationary rider keeps physical feet support")
+	var vertical_bounce := state(2.2)
+	vertical_bounce.groundSpeedMps = 0.0
+	input.update_auto_feet(1.0 / 240.0, vertical_bounce)
+	check(input.foot_down, "vertical stopped chassis bounce with supported tires does not retract boots")
+	advance(input, 0.7, vertical_bounce)
+	check(input.foot_down, "stopped support remains available despite vertical speed above riding threshold")
+	vertical_bounce.groundSpeedMps = 1.5
+	input.update_auto_feet(1.0 / 240.0, vertical_bounce)
+	check(not input.foot_down, "horizontal rolling speed still immediately raises boots")
+	vertical_bounce.groundSpeedMps = 0.0
+	advance(input, 0.5, vertical_bounce)
+	check(input.foot_down, "horizontal stopped dwell restores boots despite vertical chassis movement")
+	vertical_bounce.frontContact = false
+	vertical_bounce.rearContact = false
+	advance(input, 0.1, vertical_bounce)
+	check(not input.foot_down, "vertical takeoff with no tire contacts still raises boots after air dwell")
+	input.reset_for_recovery()
 	input.throttle = 0.8
 	input.clutch = 0.0
 	advance(input, 0.5, state(0.0))
@@ -223,6 +240,22 @@ func _native_stop_checks(game: Node3D) -> void:
 	check(feet_enabled and game.bike.chassis.get_contact_count() > 0 and not bool(stopped.crashed)
 		and float(stopped.speedMps) < 0.25 and game.bike.chassis.global_basis.y.dot(Vector3.UP) > 0.98,
 		"flat stopped support comes from actual native boot contacts with an upright stationary bike")
+	# Probe the contact-cache interval immediately after a real chassis impact.
+	# This is a single velocity perturbation of the supported native fixture,
+	# not a simulated rolling/airborne recipe or a forced pose correction.
+	paused = true
+	var prior_velocity: Vector3 = game.bike.chassis.linear_velocity
+	game.bike.chassis.linear_velocity = Vector3(0.0, 2.2, 0.0)
+	var bounced: Dictionary = game.bike.get_telemetry()
+	var foot_probe: RefCounted = RiderInput.new()
+	foot_probe.update_auto_feet(1.0 / 240.0, bounced)
+	check(bool(bounced.frontContact) and bool(bounced.rearContact)
+		and float(bounced.frontLoad) > 0.0 and float(bounced.rearLoad) > 0.0,
+		"vertical-impact fixture retains the native supported tire observations")
+	check(float(bounced.speedMps) > 2.0 and is_zero_approx(float(bounced.groundSpeedMps)) and foot_probe.foot_down,
+		"actual main-game telemetry separates vertical impact speed from stopped boot decisions")
+	game.bike.chassis.linear_velocity = prior_velocity
+	paused = false
 	game.bike.shift_gear(1)
 	Input.action_press("mx_throttle")
 	Input.action_press("mx_clutch_release")
@@ -302,8 +335,14 @@ func _anatomy_checks(game: Node3D) -> void:
 				else:
 					standing_hip_y = visual._pelvis.position.y
 	check(standing_hip_y - sitting_hip_y > 0.25, "standing posture opens legs instead of maintaining a seated squat")
-	visual.update_pose(0.0, 0.0, 0.0, 0.0, true, {"pose_reset": true})
+	var physical_targets: Array[Vector3] = game.bike._support_boot_targets()
+	visual.update_pose(0.0, 0.0, 0.0, 0.0, true,
+		{"pose_reset": true, "support_boot_targets": physical_targets})
 	var planted := true
-	for boot: Node3D in visual._boots:
-		planted = planted and absf(boot.position.y + 0.635) < 0.0001
-	check(planted, "rest/recovery boots return to physical foot support position")
+	for i: int in range(2):
+		var boot: Node3D = visual._boots[i]
+		var foot: CollisionShape3D = game.bike._feet[i]
+		var capsule := foot.shape as CapsuleShape3D
+		planted = planted and boot.position.distance_to(physical_targets[i]) < 0.0001 \
+			and absf((boot.position.y - 0.13) - (foot.position.y - capsule.height * 0.5)) < 0.0001
+	check(planted, "rest/recovery visual soles match the actual physical supporting capsules")

@@ -14,7 +14,33 @@ static func new_state() -> Dictionary:
 		"bumpForce": 0.0, "elasticForce": 0.0, "damperForce": 0.0,
 		"damperPower": 0.0, "elasticEnergy": 0.0, "unlimitedForce": 0.0,
 		"forceLimit": 0.0, "limited": false, "damperVelocity": 0.0,
-		"effectiveMass": 0.0, "bottomingDamperCoefficient": 0.0}
+		"effectiveMass": 0.0, "bottomingDamperCoefficient": 0.0, "contactConstrained": false}
+
+## Contact-normal constraints remove part of an axle's translational response.
+## Schur-complement the unilateral normal row out of the wheel mobility before
+## integrating the damper. A planted wheel cannot accelerate into the ground;
+## treating it as a free 5 kg mass silently weakens a 1000 N.s/m damper.
+## Phase-aligned native patch geometry and positive solved support qualify it.
+static func contact_axis_mobility(mass: float, inverse_inertia: Basis,
+		patch_from_com: Vector3, axis: Vector3, normal: Vector3,
+		normal_support: float) -> float:
+	var inverse_mass := 1.0 / maxf(mass, 0.001)
+	if normal_support <= 0.0 or normal.length_squared() < 0.5:
+		return inverse_mass
+	var n := normal.normalized()
+	var lever := patch_from_com.cross(n)
+	var normal_mobility := inverse_mass + lever.dot(inverse_inertia * lever)
+	var coupling := axis.dot(n) * inverse_mass
+	return maxf(0.0, inverse_mass - coupling * coupling / maxf(normal_mobility, 0.000001))
+
+## Rebound may unload a supported axle. The constrained damper candidate is
+## invalid if its force would require the ground to pull on the tire. Remove
+## the previous strut from observed support, then predict the candidate row.
+## Rejecting that row restores free-air mobility; it never creates support.
+static func retains_normal_support(normal_support: float, previous_wheel_force: Vector3,
+		candidate_strut_force: Vector3, normal: Vector3) -> bool:
+	return normal_support > 0.0 and normal_support + \
+		previous_wheel_force.dot(normal) + candidate_strut_force.dot(normal) > 0.0
 
 static func _force_limit(cfg: Dictionary, spring_rate: float, travel: float, preload_length: float) -> float:
 	# The rubber stop remains independent of the main coil. This bound guards

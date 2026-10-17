@@ -5,6 +5,7 @@ const TrackBuilder = preload("res://scripts/track_builder.gd")
 const BikeScript = preload("res://scripts/bike_controller.gd")
 const RiderInput = preload("res://scripts/rider_input.gd")
 const HandlingSetup = preload("res://physics/handling_setup.gd")
+const TelemetryRecorder = preload("res://scripts/telemetry_recorder.gd")
 const INK: Color = Color("101a29")
 const PANEL: Color = Color("182638")
 const ORANGE: Color = Color("ff9854")
@@ -71,6 +72,10 @@ var audio_frequency: float = 18.0
 var audio_level: float = 0.0
 var audio_noise: float = 0.0
 var quitting: bool = false
+var physics_panel: PanelContainer
+var physics_label: Label
+var physics_record_indicator: Label
+var physics_recorder: RefCounted = TelemetryRecorder.new()
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
@@ -88,8 +93,11 @@ func _ready() -> void:
 	bike = BikeScript.new()
 	bike.name = "TestBike250F"
 	bike.process_mode = Node.PROCESS_MODE_PAUSABLE
-	add_child(bike)
+	# _ready builds the native bodies synchronously on entering the tree.
+	# Supply the loaded setup first; configure intentionally cannot rebuild a
+	# live assembly and would otherwise silently discard every saved setting.
 	bike.configure(runtime_config)
+	add_child(bike)
 	bike.reset_bike(track.get("spawn", Transform3D.IDENTITY))
 	bike.set_controls(rider_input.packet())
 	previous_position = _chassis().global_position
@@ -107,12 +115,14 @@ func _stop_engine_audio() -> void:
 	engine_audio = null
 
 func _exit_tree() -> void:
+	physics_recorder.stop()
 	_stop_engine_audio()
 
 func _quit_game() -> void:
 	if quitting:
 		return
 	quitting = true
+	physics_recorder.stop()
 	rider_input.release_controls()
 	get_tree().paused = true
 	var had_audio: bool = is_instance_valid(engine_audio)
@@ -170,6 +180,12 @@ func _physics_process(delta: float) -> void:
 		return
 	var enabled: bool = session_started and focused and modal_kind.is_empty() and not get_tree().paused
 	var telemetry: Dictionary = bike.get_telemetry()
+	# Observe the completed solve and the inputs which produced it, before
+	# polling this frame's new commands. Paused/menu frames are not recorded.
+	if enabled and physics_recorder.active():
+		if not physics_recorder.capture(Engine.get_physics_frames() - 1, delta, telemetry, bike.applied_controls):
+			physics_recorder.stop()
+			_notice("Physics recording stopped: the file could not be written.", 6.0)
 	rider_input.tick(delta, enabled)
 	if enabled:
 		rider_input.update_auto_feet(delta, telemetry)
@@ -202,6 +218,17 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if quitting:
 		return
+	# Debug keys are handled before device selection so opening telemetry
+	# never steals riding input from the selected controller.
+	if event is InputEventKey and event.is_pressed() and not event.echo and session_started:
+		if event.physical_keycode == KEY_F8:
+			physics_panel.visible = not physics_panel.visible
+			get_viewport().set_input_as_handled()
+			return
+		if event.physical_keycode == KEY_F9:
+			_toggle_physics_recording()
+			get_viewport().set_input_as_handled()
+			return
 	rider_input.note_event(event)
 	if event is InputEventKey and (event as InputEventKey).echo:
 		return
@@ -638,8 +665,74 @@ func _build_hud() -> void:
 	var hint: Label = _label("H  CONTROLS   M  CAMERA   U  SETUP   R  RECOVER   ESC  MENU   RMB  LOOK", 13, MUTED)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_panel.add_child(hint)
+	_build_physics_panel()
+
+func _build_physics_panel() -> void:
+	physics_panel = PanelContainer.new()
+	physics_panel.name = "PhysicsDiagnostics"
+	physics_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	physics_panel.offset_left = -456.0
+	physics_panel.offset_right = -24.0
+	physics_panel.offset_top = 202.0
+	physics_panel.offset_bottom = 530.0
+	physics_panel.add_theme_stylebox_override("panel", _panel_style(Color(0.03, 0.06, 0.10, 0.94)))
+	physics_panel.visible = false
+	physics_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(physics_panel)
+	physics_label = _label("PHYSICS TELEMETRY", 13, TEAL)
+	physics_panel.add_child(physics_label)
+	physics_record_indicator = _label("RECORDING PHYSICS · F9 STOP", 13, ORANGE)
+	physics_record_indicator.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	physics_record_indicator.offset_left = -170.0
+	physics_record_indicator.offset_right = 170.0
+	physics_record_indicator.offset_top = 20.0
+	physics_record_indicator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	physics_record_indicator.visible = false
+	hud.add_child(physics_record_indicator)
+
+func _toggle_physics_recording() -> void:
+	if physics_recorder.active():
+		var saved_path: String = physics_recorder.stop()
+		_notice("Physics CSV saved: " + saved_path, 12.0)
+	else:
+		var status: Error = physics_recorder.start()
+		if status == OK:
+			physics_panel.visible = true
+			_notice("Physics CSV recording: " + physics_recorder.path, 8.0)
+		else:
+			physics_recorder.stop()
+			_notice("Physics recording could not start: " + error_string(status), 6.0)
+
+func _physics_text(t: Dictionary) -> String:
+	var supported := (bool(t.get("frontContact", false)) and float(t.get("frontLoad", 0.0)) > 1.0) \
+		or (bool(t.get("rearContact", false)) and float(t.get("rearLoad", 0.0)) > 1.0)
+	var crash_observation: Dictionary = t.get("crashObservation", {})
+	var landing := "Last landing: none recorded"
+	if crash_observation.has("impactSpeed"):
+		landing = "Last landing: %.1f impact / %.1f side m/s · %.1f°" % [float(crash_observation.get("impactSpeed", 0.0)), float(crash_observation.get("sideSpeed", 0.0)), rad_to_deg(float(crash_observation.get("landingTilt", 0.0)))]
+	return "\n".join([
+		"PHYSICS TELEMETRY · F8 HIDE · F9 RECORD",
+		"%.1f m/s · %s · %s" % [float(t.get("speedMps", 0.0)), "SUPPORTED" if supported else "AIRBORNE", str(t.get("ridingMode", ""))],
+		"Bank %+.1f° · pitch %+.1f° · steer %+.1f°" % [rad_to_deg(float(t.get("roll", 0.0))), rad_to_deg(float(t.get("pitch", 0.0))), rad_to_deg(float(t.get("steerAngle", 0.0)))],
+		"Local rates pitch / yaw / roll (rad/s)",
+		"%+.2f / %+.2f / %+.2f" % [float(t.get("pitchRate", 0.0)), float(t.get("yawRate", 0.0)), float(t.get("rollRate", 0.0))],
+		"Front / rear load: %.0f / %.0f N" % [float(t.get("frontLoad", 0.0)), float(t.get("rearLoad", 0.0))],
+		"Slip ratio: %+.3f / %+.3f" % [float(t.get("frontSlip", 0.0)), float(t.get("rearSlip", 0.0))],
+		"Slip angle: %+.2f° / %+.2f°" % [rad_to_deg(float(t.get("frontSlipAngle", 0.0))), rad_to_deg(float(t.get("rearSlipAngle", 0.0)))],
+		"Compression: %.3f / %.3f m" % [float(t.get("frontCompression", 0.0)), float(t.get("rearCompression", 0.0))],
+		"Grip use: %.2f / %.2f · bars %+.1f N·m" % [float(t.get("frontUtilization", 0.0)), float(t.get("rearUtilization", 0.0)), float(t.get("riderSteeringTorque", 0.0))],
+		"Ground / air / landing assistance (N·m)",
+		"%.1f / %.1f / %.1f" % [(t.get("groundAssistTorque", Vector3.ZERO) as Vector3).length(), (t.get("airAssistTorque", Vector3.ZERO) as Vector3).length(), (t.get("landingAssistTorque", Vector3.ZERO) as Vector3).length()],
+		"Crash: " + (str(t.get("crashReason", "")) if bool(t.get("crashed", false)) else "none"),
+		"Support bank / pitch: %+.1f° / %+.1f°" % [rad_to_deg(float(crash_observation.get("supportBank", 0.0))), rad_to_deg(float(crash_observation.get("supportPitch", 0.0)))],
+		landing,
+		("CSV: %d frames recorded" % int(physics_recorder.rows)) if physics_recorder.active() else "CSV recording off"
+	])
 
 func _update_hud(t: Dictionary) -> void:
+	physics_record_indicator.visible = physics_recorder.active()
+	if physics_panel.visible:
+		physics_label.text = _physics_text(t)
 	(labels.speed as Label).text = "%3.0f  km/h" % float(t.get("speed", 0.0))
 	var gear: int = int(t.get("gear", 0))
 	var gear_text: String = "N" if gear == 0 else str(gear)
@@ -765,6 +858,7 @@ func _help_content(content: VBoxContainer) -> void:
 	keyboard.add_child(_label("C  Seated / standing     Feet lift and plant automatically", 15))
 	keyboard.add_child(_label("F + lean on a jump face  Hold to scrub the takeoff", 15))
 	keyboard.add_child(_label("R  Recover     M  Camera     H  Help     U  Setup     ESC  Pause", 15))
+	keyboard.add_child(_label("Physics telemetry: F8 display · F9 start / stop CSV recording", 13, MUTED))
 	keyboard.add_child(_label("Hold right mouse to orbit · Mouse wheel changes camera distance", 14, MUTED))
 	keyboard.add_child(_label("Starting: E → gentle W → hold B to release the clutch. Feet lift as you move.\nV/B hold the lever position. A/D requests bike lean; Z/X moves your upper body.", 14, TEAL))
 	var controller: VBoxContainer = VBoxContainer.new()

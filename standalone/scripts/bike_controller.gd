@@ -64,6 +64,9 @@ var front_wheel: Wheel
 var rear_wheel: Wheel
 var fork: RigidBody3D
 var controls: Dictionary = _neutral_controls()
+## Observation of the packet actually passed to the previous force update.
+## Keep it separate from requested controls, especially across crash gating.
+var applied_controls: Dictionary = _neutral_controls()
 var drive_state: Dictionary = {}
 var front_tire_state: Dictionary = {}
 var rear_tire_state: Dictionary = {}
@@ -74,6 +77,16 @@ var _rear_result: Dictionary = {}
 var _drive_result: Dictionary = {}
 var _joints: Array[Joint3D] = []
 var _feet: Array[CollisionShape3D] = []
+var _feet_requested: bool = false
+var _foot_mount_pending: bool = true
+var _feet_planted: Array[bool] = [false, false]
+const FOOT_RETRACTED_Y: float = -0.10
+const FOOT_MOUNT_Y: float = -0.62
+const FOOT_MAX_EXTENSION_Y: float = -0.72
+const FOOT_DEPLOY_SPEED: float = 2.0 # m/s, a finite human leg extension.
+const FOOT_GROUND_CLEARANCE: float = 0.001
+var _foot_reach_limit: float = FOOT_MOUNT_Y
+
 var _rider_visual: RiderVisual
 var _bike_visual: BikeVisual
 var _rider_collision: CollisionShape3D
@@ -91,6 +104,7 @@ var _last_rear_slide: bool = false
 var _crash_elapsed: float = 0.0
 var crashed: bool = false
 var crash_reason: String = ""
+var _crash_observation: Dictionary = {}
 var _built: bool = false
 var _reset_pending: bool = false
 ## The optional virtual human uses finite handlebar grip and ground-informed
@@ -192,6 +206,9 @@ func _build_bike() -> void:
 	chassis.inertia = Vector3(15.8, 10.8, 2.6)
 	var guard_material := PhysicsMaterial.new()
 	guard_material.friction = 0.45
+	# Soil normal support has zero native tire friction. Boots/guards still
+	# need their own contact grip; rough chooses this material at the pair.
+	guard_material.rough = true
 	guard_material.bounce = 0.04
 	chassis.physics_material_override = guard_material
 	_box_collision(chassis, Vector3(0.27, 0.31, 0.61), Vector3(0, -0.09, 0.08))
@@ -202,7 +219,7 @@ func _build_bike() -> void:
 	rider_capsule.height = 0.78
 	_rider_collision.shape = rider_capsule
 	rider_body = _new_body("PhysicalRider", float(config.RiderMass), RIDER_ORIGIN)
-	rider_body.inertia = Vector3(float(config.Rider.PitchInertia), float(config.Rider.RollInertia), float(config.Rider.RollInertia))
+	rider_body.inertia = Vector3(float(config.Rider.PitchInertia), float(config.Rider.YawInertia), float(config.Rider.RollInertia))
 	rider_body.physics_material_override = guard_material
 	_rider_collision.position = Vector3.ZERO
 	rider_body.add_child(_rider_collision)
@@ -212,7 +229,8 @@ func _build_bike() -> void:
 		foot_shape.radius = 0.05
 		foot_shape.height = 0.28
 		foot.shape = foot_shape
-		foot.position = Vector3(side * 0.34, -0.62, 0.03)
+		foot.position = Vector3(side * 0.34, FOOT_RETRACTED_Y, 0.03)
+		foot.disabled = true
 		chassis.add_child(foot)
 		_feet.append(foot)
 	fork = _new_body("SteeringFork", float(config.Unsprung.ForkMass), HEAD)
@@ -315,6 +333,13 @@ func _make_wheel(wheel_name: String, radius: float, width: float,
 	return wheel
 
 func _reset_models() -> void:
+	_foot_reach_limit = FOOT_MOUNT_Y
+	_foot_mount_pending = true
+	_feet_requested = false
+	_feet_planted = [false, false]
+	for foot: CollisionShape3D in _feet:
+		foot.position.y = FOOT_RETRACTED_Y
+		foot.set_deferred("disabled", true)
 	_air_control.reset()
 	_scrub_control.reset()
 	_scrub_result = {}
@@ -381,8 +406,10 @@ func _reset_models() -> void:
 	_steering_target = 0.0
 	crashed = false
 	crash_reason = ""
+	_crash_observation = {}
 	_crash_elapsed = 0
 	controls = _neutral_controls()
+	applied_controls = _neutral_controls()
 
 func reset_bike(spawn: Transform3D, force_recovery: bool = false) -> bool:
 	if not _built or not spawn.origin.is_finite() or not spawn.basis.is_finite() or absf(spawn.basis.determinant()) < 0.000001:
@@ -507,6 +534,8 @@ func _physics_process(dt: float) -> void:
 		active.lean = 0.0
 		active.bodyForward = 0.0
 		active.bodySide = 0.0
+	applied_controls = active.duplicate()
+	_update_feet(dt)
 	_scrub_result = _scrub_control.update({"grounded": _has_support(),
 		"bank": _angles().x, "speed": chassis.linear_velocity.length(),
 		"facePitch": _loaded_face_pitch(), "crestApproach": _scrub_crest_approach(active),
@@ -618,13 +647,13 @@ func _apply_landing_assistance(input: Dictionary, dt: float) -> void:
 		_landing_assist_remaining = maxf(0.0, _landing_assist_remaining - dt)
 		return
 	if _loaded_air_time >= float(settings.get("LandingMinFlight", 0.20)):
-		_landing_assist_remaining = float(settings.get("LandingTime", 1.25))
+		_landing_assist_remaining = float(settings.get("LandingTime", 0.3))
 	_loaded_air_time = 0.0
 	_landing_assist_remaining = maxf(0.0, _landing_assist_remaining - dt)
 	if _landing_assist_remaining <= 0.0:
 		return
 	var strength := clampf(float(settings.get("Strength", 1.0)), 0.0, 1.0) * clampf(float(settings.get("LandingStrength", 1.0)), 0.0, 1.0)
-	var envelope := smoothstep(0.0, float(settings.get("LandingTime", 1.25)) * 0.4, _landing_assist_remaining)
+	var envelope := smoothstep(0.0, float(settings.get("LandingTime", 0.3)) * 0.4, _landing_assist_remaining)
 	var normal := front_wheel.contact_normal * front_wheel.normal_load + rear_wheel.contact_normal * rear_wheel.normal_load
 	if normal.length_squared() < 0.0001:
 		return
@@ -635,12 +664,14 @@ func _apply_landing_assistance(input: Dictionary, dt: float) -> void:
 	var pitch := asin(clampf((-chassis.global_basis.z).dot(normal), -1.0, 1.0))
 	var deadband := float(settings.get("LandingPitchDeadband", deg_to_rad(8.0)))
 	var pitch_error := signf(pitch) * maxf(0.0, absf(pitch) - deadband)
-	var pitch_torque := -pitch_error * float(settings.get("LandingPitchStiffness", 200.0)) - omega.x * float(settings.get("LandingPitchDamping", 65.0))
+	var pitch_torque := -pitch_error * float(settings.get("LandingPitchStiffness", 0.0)) - omega.x * float(settings.get("LandingPitchDamping", 65.0))
 	pitch_torque *= 1.0 - absf(float(input.bodyForward))
 	# Only damp roll-rate error relative to the player's active lean task.
 	# The landing aid has no bank/heading target and cannot cancel a requested
-	# lean rate. Pitch gets a small terrain-relative catch beyond a deadband;
-	# full manual fore/aft input retains authority. The aid expires after this finite landing window.
+	# lean rate. Default pitch assistance only dissipates rotation during a
+	# brief impact window; it has no upright/terrain attitude target. An optional
+	# arcade setup may explicitly enable the separate pitch spring. Full manual
+	# fore/aft input retains authority, and no assistance acts without support.
 	var roll_torque := (_bank_rate() - _lean_rate_target) * float(settings.get("LandingRollDamping", 70.0))
 	var torque := Vector3(pitch_torque, 0.0, roll_torque).limit_length(float(settings.get("LandingMaxTorque", 100.0)))
 	_landing_assist_torque = chassis.global_basis * torque * strength * envelope * load
@@ -680,6 +711,16 @@ func _apply_suspension(wheel: Wheel, parent_body: RigidBody3D,
 	var effective_mass := _suspension_effective_mass(wheel, parent_body, axis, is_front)
 	var output: Dictionary = Suspension.step_articulated(state, compression, rate, dt, settings, effective_mass)
 	var force := axis * float(output.force)
+	var contact_constrained := wheel.contact and wheel.normal_load > 0.0
+	if contact_constrained and not Suspension.retains_normal_support(wheel.normal_load,
+		wheel.known_suspension_force, force, wheel.contact_normal):
+		# Strong rebound can release a real contact. Do not integrate against an
+		# infinite ground support that a unilateral tire cannot actually supply.
+		effective_mass = _suspension_effective_mass(wheel, parent_body, axis, is_front, false)
+		output = Suspension.step_articulated(state, compression, rate, dt, settings, effective_mass)
+		force = axis * float(output.force)
+		contact_constrained = false
+	state["contactConstrained"] = contact_constrained
 	# The compressed strut pushes wheel down, frame up. Equal-and-opposite
 	# forces at the hub preserve total linear/angular momentum in the air.
 	wheel.record_axial_loading(axis, -force, compression, float(settings.Travel))
@@ -687,7 +728,7 @@ func _apply_suspension(wheel: Wheel, parent_body: RigidBody3D,
 	parent_body.apply_force(force, parent_offset)
 
 func _suspension_effective_mass(wheel: RigidBody3D, parent_body: RigidBody3D,
-		axis: Vector3, is_front: bool) -> float:
+		axis: Vector3, is_front: bool, constrain_contact: bool = true) -> float:
 	# The front bearing constrains axial pitching to the frame. Using the
 	# fork's 2 kg alone misses that constrained inertia. This carrier model
 	# includes frame rotation at the hub; the physical rider stays compliant.
@@ -695,7 +736,16 @@ func _suspension_effective_mass(wheel: RigidBody3D, parent_body: RigidBody3D,
 	var lever := wheel.global_position - (carrier.global_transform * carrier.center_of_mass)
 	var local_axis := carrier.global_basis.inverse() * lever.cross(axis)
 	var inertia := carrier.inertia
-	var inverse_mass := 1.0 / wheel.mass + 1.0 / carrier.mass
+	var wheel_inverse := 1.0 / wheel.mass
+	if constrain_contact and wheel.contact and wheel.normal_load > 0.0:
+		# Mobility and force integration use the current hub/patch phase, as
+		# the tire force does. A stale translated patch invents a normal torque
+		# lever on an otherwise radial rolling contact at high speed.
+		var patch_lever: Vector3 = wheel.tire_contact_position - (wheel.global_transform * wheel.center_of_mass)
+		wheel_inverse = Suspension.contact_axis_mobility(wheel.mass,
+			wheel.get_inverse_inertia_tensor(), patch_lever, axis,
+			wheel.contact_normal, wheel.normal_load)
+	var inverse_mass := wheel_inverse + 1.0 / carrier.mass
 	inverse_mass += local_axis.x * local_axis.x / inertia.x + local_axis.y * local_axis.y / inertia.y + local_axis.z * local_axis.z / inertia.z
 	return 1.0 / inverse_mass
 
@@ -734,9 +784,9 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			_line_ground_seen = true
 		if not grounded and _line_ground_seen and _air_time >= float(riding.get("AirLinePerceptionTime", 0.2)):
 			# A sustained jump clears old ground-feedback history. A brief bump
-			# does not erase the human's chosen line each time a patch unloads.
-			# Neutral flight preserves that line; a deliberate whip chooses an
-			# actual travel line on return. Flight has no balance/heading actuator.
+			# does not erase the human's chosen course each time a patch unloads.
+			# Neutral flight preserves that course; a deliberate whip chooses an
+			# actual travel course on return. Flight has no balance/heading actuator.
 			_line_capture_pending = true
 			_line_settle_time = 0.0
 			if _air_line_changed:
@@ -778,7 +828,17 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		var low_speed_lean := atan(speed_squared * tan(max_angle * 0.85) / (9.81 * wheelbase))
 		var front_surface: Dictionary = config.Surfaces.get(front_wheel.surface, config.Surfaces.dirt)
 		var rear_surface: Dictionary = config.Surfaces.get(rear_wheel.surface, config.Surfaces.dirt)
-		var grip_lean := minf(float(riding.get("MaxComfortLean", deg_to_rad(45.0))), atan(minf(float(front_surface.Grip), float(rear_surface.Grip)) * float(riding.get("GripMargin", 0.92))))
+		# Feasible requested bank uses the same independent tire capacities as
+		# the brush model, including each axle's grip setup and load sensitivity.
+		# A nominal axle load avoids converting every landing/unload into a new
+		# lean request. Actual loaded combined-slip forces still decide whether
+		# an aggressive throttle/brake input exceeds grip; there is no traction
+		# controller forcing the bike upright when the rear starts to slide.
+		var nominal_load := (float(config.BikeMass) + float(config.RiderMass)) * float(config.Gravity) * 0.5
+		var front_limits := Tire.force_limits(nominal_load, Tire.axle_settings(config.Tire, "Front"), front_surface)
+		var rear_limits := Tire.force_limits(nominal_load, Tire.axle_settings(config.Tire, "Rear"), rear_surface)
+		var lateral_grip := minf(float(front_limits.capacityY), float(rear_limits.capacityY)) / maxf(nominal_load, 1.0)
+		var grip_lean := minf(float(riding.get("MaxComfortLean", deg_to_rad(45.0))), atan(lateral_grip * float(riding.get("GripMargin", 0.92))))
 		var available_lean := minf(minf(deg_to_rad(49.0), grip_lean), low_speed_lean)
 		# The left stick requests the bank of the combined bike/rider mass.
 		# Rider roll and side movement are independent physical counterbalance,
@@ -790,21 +850,20 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		var forward := -chassis.global_basis.z
 		forward.y = 0.0
 		forward = forward.normalized()
+		var course := chassis.linear_velocity
+		course.y = 0.0
+		course = course.normalized() if course.length_squared() > 2.25 else forward
 		if _landing_line_pending and grounded and front_wheel.normal_load + rear_wheel.normal_load > 100.0:
-			# Neutral jumping preserves the direction the human chose before
-			# takeoff. Adopting every sideways touchdown velocity as a new desired
-			# heading lets small drifts compound across successive tabletops.
-			# Reacquire that line gradually through the same finite ground
-			# handlebars; flight has no correction.
+			# Neutral jumping preserves the direction chosen before takeoff.
+			# Repeatedly adopting every sideways landing drift as the new desired
+			# course compounds that drift across successive jumps. A deliberate
+			# whip instead chooses its actual exit course. Only the finite ground
+			# handlebars reacquire direction; flight receives no correction.
 			if _air_line_changed:
-				# A deliberate whip chooses a different actual exit direction. Do
-				# not ask ground bars to return to the line before that maneuver.
-				var landing_direction := chassis.linear_velocity
-				landing_direction.y = 0.0
-				_rider_heading = landing_direction.normalized() if landing_direction.length_squared() > 2.25 else forward
+				_rider_heading = course
 				_rider_line_origin = chassis.global_position
 			elif _rider_heading.length_squared() < 0.5:
-				_rider_heading = forward
+				_rider_heading = course
 			_landing_line_pending = false
 			_landing_line_active = true
 			_landing_line_elapsed = 0.0
@@ -816,7 +875,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			_landing_line_pending = false
 			_landing_line_active = false
 			_landing_line_elapsed = 0.0
-			_rider_heading = forward
+			_rider_heading = course
 			_rider_line_origin = chassis.global_position
 			_line_capture_pending = true
 			_line_settle_time = 0.0
@@ -826,7 +885,7 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			# next line. Capturing the still-turning tangent immediately asks the
 			# rider to undo the natural finishing arc with an opposite bank.
 			# This changes only a human intent/reference, never the body motion.
-			_rider_heading = forward
+			_rider_heading = course
 			_rider_line_origin = chassis.global_position
 			if grounded and absf(lean) < deg_to_rad(2.0) and absf(lean_rate) < 0.12 and absf(_heading_rate()) < 0.06:
 				_line_settle_time += dt
@@ -838,14 +897,10 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			var reference := _rider_heading
 			reference.y = 0.0
 			reference = reference.normalized()
-			var heading_error := atan2(reference.cross(forward).y, reference.dot(forward))
-			# Releasing directional input asks the virtual human to hold the
-			# chosen line. Looking ahead corrects drift through the same finite
-			# bars; there is no rail, yaw force or position constraint.
-			var right := reference.cross(Vector3.UP).normalized()
-			var lateral_error := (chassis.global_position - _rider_line_origin).dot(right)
-			heading_error -= atan(lateral_error / maxf(6.0, forward_speed * float(riding.get("LineLookaheadTime", 1.5))))
-			var yaw_rate := _heading_rate()
+			var heading_error := atan2(reference.cross(course).y, reference.dot(course))
+			# Optional neutral rider holds a direction, never a historical lane.
+			# A lateral-position spring used to pull the bike into a new corner
+			# seconds after stick release, even though the requested bank was zero.
 			var heading_frequency := lerpf(float(riding.get("SeatedHeadingFrequency", 3.0)), float(riding.get("StandingHeadingFrequency", 3.0)), _standing)
 			if _line_from_player_turn:
 				# A freshly chosen turn exit has a less certain line than the
@@ -853,8 +908,8 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 				# below the rider's roll bandwidth, rather than trying to correct
 				# tire relaxation/side-slip with another immediate opposite turn.
 				heading_frequency = lerpf(float(riding.get("TurnExitHeadingFrequency", 1.2)), float(riding.get("StandingTurnExitHeadingFrequency", 0.65)), _standing)
-			_heading_correction = clampf(atan(forward_speed * (heading_error * heading_frequency - yaw_rate * float(riding.get("HeadingDamping", 0.8))) / 9.81),
-				-float(riding.get("MaxHeadingCorrection", deg_to_rad(12.0))), float(riding.get("MaxHeadingCorrection", deg_to_rad(12.0))))
+			_heading_correction = LeanControl.heading_bank(heading_error, forward_speed,
+				heading_frequency, float(riding.get("MaxHeadingCorrection", deg_to_rad(8.7))))
 			# At walking pace prioritize balance over recovering an old lane.
 			# A full heading request while slowing through a whoop otherwise
 			# demands a deep bank that the remaining forward speed cannot support.
@@ -872,17 +927,6 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		if grounded:
 			var intent_change := (requested_bank - _bank_intent) * (1.0 - exp(-dt / float(riding.get("IntentResponse", 0.16))))
 			_bank_intent += clampf(intent_change, -float(riding.get("MaxLeanRate", 1.4)) * dt, float(riding.get("MaxLeanRate", 1.4)) * dt)
-		# Seated and standing compliance have different roll modes. Schedule
-		# the virtual human's feedback with the actual posture, without changing
-		# available grip, bearing strength or the bike's physical attitude.
-		var frequency := lerpf(float(riding.get("LowFrequency", 3.0)), lerpf(float(riding.get("SeatedRollFrequency", 6.4)), float(riding.get("RollFrequency", 3.4)), _standing), smoothstep(2.0, 7.0, forward_speed))
-		frequency = lerpf(frequency, float(riding.get("HighSpeedFrequency", 3.4)), smoothstep(15.0, 28.0, forward_speed))
-		# Deliberate turns need quicker human bar response than a neutral rider
-		# traversing whoops. Schedule muscle feedback from the requested task,
-		# never by adding an independent frame stabilization force.
-		var turn_task := smoothstep(deg_to_rad(1.0), deg_to_rad(5.0), absf(_bank_intent))
-		frequency = lerpf(frequency, maxf(frequency, float(riding.get("TurnRollFrequency", 5.2))), turn_task)
-		var factor := height * wheelbase / speed_squared
 		# Roll equilibrium includes rider COM displaced from the frame centre.
 		var com_camber := atan2(chassis.to_local(_sprung_com()).x, height)
 		# Holding frame bank would steer away every real rider weight shift.
@@ -890,10 +934,10 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 		# combined-CG turn request, with all motion supplied by finite bars.
 		if grounded:
 			_rider_target_lean = clampf(_bank_intent - com_camber, -deg_to_rad(49.0), deg_to_rad(49.0))
-		var equilibrium := 9.81 * wheelbase * tan(clampf(lean + com_camber, -1.1, 1.1)) / speed_squared
-		_steering_target = clampf(equilibrium + factor * (frequency * frequency *
-			(lean - _rider_target_lean) + 2.0 * float(riding.get("RollDamping", 1.2)) * frequency * lean_rate), -max_angle, max_angle)
-		if str(riding.get("ControlLaw", "spring")) == "rate" and (absf(steer_request) > 0.025 or _line_capture_pending):
+		if grounded:
+			# One finite roll-rate task covers corner entry, reversal, recovery
+			# and neutral riding. Switching to a different angle spring after a
+			# turn made the same bank/rate state produce a new bar command.
 			var roll_task := LeanControl.target(lean + com_camber, _bank_intent, lean_rate,
 				forward_speed, height, wheelbase, max_angle, absf(steer_request) < 0.025, riding)
 			_steering_target = float(roll_task.steer)
@@ -1131,24 +1175,11 @@ func _update_rider(input: Dictionary, dt: float) -> void:
 		body_request = clampf(body_request + _automatic_body_forward * reflex_authority, -1.0, 1.0)
 	else:
 		_automatic_body_forward = 0.0
-	if riding_mode == "virtual_rider" and not crashed and float(_air_settings().get("Strength", 1.0)) <= 0.0:
-		# Air controls express a rider's push/pull effort through the bars and
-		# hips: pulling back raises the nose, pushing forward lowers it. The
-		# actual torso counter-motion exchanges internal momentum, rather than
-		# assigning bike pitch or reading a desired world/landing attitude.
-		# A neutral stick holds the body-relative posture selected at takeoff.
-		# Brief wheel unloading across a whoop is still the ground riding task.
-		# Hold that posture instead of reversing fore/aft controls every crest.
-		if unsupported:
-			var air_control := smoothstep(float(config.VirtualRider.get("AirBodyPerceptionTime", 0.08)), float(config.VirtualRider.get("AirBodyPerceptionTime", 0.08)) + 0.04, _air_time)
-			_air_pitch_blend = maxf(_air_pitch_blend, air_control)
-		else:
-			_air_pitch_blend = move_toward(_air_pitch_blend, 0.0, dt / float(config.VirtualRider.get("GroundBodyHandoffTime", 0.35)))
-		var air_request := clampf(_air_body_reference - float(input.bodyForward) * float(config.VirtualRider.get("AirPitchTravel", 1.0)), -1.0, 1.0)
-		body_request = lerpf(_air_body_reference if unsupported and _air_pitch_blend == 0.0 else body_request, air_request, _air_pitch_blend)
-	elif riding_mode == "virtual_rider" and not crashed:
+	if riding_mode == "virtual_rider" and not crashed:
 		# Bar, torso and bike-rate requests share one air task, so native muscle
 		# reactions do not fight a separately interpreted airborne command.
+		# Its finite human pose/perception task survives an external-torque
+		# strength of zero; tuning assistance must never reverse player inputs.
 		_air_pitch_blend = float(_air_result.get("blend", 0.0))
 		body_request = lerpf(body_request, float(_air_result.get("pitchPoseRequest", body_request)), _air_pitch_blend)
 	# The reflex only changes a bounded real rider articulation; it applies
@@ -1211,6 +1242,7 @@ func _apply_rider_pose(pose_reset: bool = false) -> void:
 		"bank": _angles().x, "steer_angle": atan2(relative_fork.x.z, relative_fork.x.x),
 		"scrub_crouch": float(_scrub_result.get("crouch", 0.0)),
 		"dt": get_physics_process_delta_time(), "pose_reset": pose_reset,
+		"support_boot_targets": _support_boot_targets(),
 		"rider_yaw_target": _body_twist * float(rider.get("MaxYaw", deg_to_rad(30.0))),
 		"rider_transform": chassis.global_transform.affine_inverse() * rider_body.global_transform,
 		"rider_reference_transform": _rider_reference_transform})
@@ -1229,11 +1261,121 @@ func _advance_rider_axis(current: float, target: float, old_rate: float,
 	var next_position := current + next_rate * dt / maxf(max_angle, 0.001)
 	return Vector2(clampf(next_position, -1.0, 1.0), next_rate)
 
-func _update_feet() -> void:
-	var feet_down: bool = bool(controls.footDown) and not crashed
-	for i in range(_feet.size()):
-		if _feet[i].disabled == feet_down:
-			_feet[i].set_deferred("disabled", not feet_down)
+func _update_feet(dt: float = 0.0) -> void:
+	var requested: bool = bool(controls.footDown) and not crashed
+	if not requested:
+		_feet_requested = false
+		_foot_mount_pending = false
+		_foot_reach_limit = FOOT_MAX_EXTENSION_Y
+		_feet_planted = [false, false]
+		for foot: CollisionShape3D in _feet:
+			if not foot.disabled:
+				foot.set_deferred("disabled", true)
+			if not is_equal_approx(foot.position.y, FOOT_RETRACTED_Y):
+				foot.position.y = FOOT_RETRACTED_Y
+		return
+	var space := get_world_3d().direct_space_state
+	var planes: Array[Dictionary] = []
+	for foot: CollisionShape3D in _feet:
+		planes.append(_foot_support_plane(foot))
+	var both_planted := _feet_planted[0] and _feet_planted[1]
+	var common_extension := INF
+	if both_planted:
+		# Only a common vertical rebound may lengthen both already planted legs.
+		# Extending just the lifted uphill leg would accommodate an ongoing fall
+		# and remove the support triangle's actual roll resistance.
+		for plane: Dictionary in planes:
+			if plane.is_empty():
+				common_extension = 0.0
+				break
+			common_extension = minf(common_extension,
+				maxf(0.0, (float(plane.clearance) - FOOT_GROUND_CLEARANCE) / float(plane.alignment)))
+		if common_extension < 0.005:
+			common_extension = 0.0
+	for i: int in range(_feet.size()):
+		var foot: CollisionShape3D = _feet[i]
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = foot.shape
+		query.collision_mask = 1
+		query.transform = foot.global_transform
+		query.margin = 0.0
+		if not _feet_requested or foot.disabled:
+			# Enabling the old fully extended capsule at a settled chassis inserted
+			# 6cm into the soil and launched the frame. A new physical foot starts
+			# retracted and may only become collidable in clear space.
+			foot.position.y = FOOT_RETRACTED_Y
+			query.transform = foot.global_transform
+			if not space.intersect_shape(query, 1).is_empty():
+				continue
+			if _foot_mount_pending and not planes[i].is_empty():
+				# Spawn/remount is already a seated support pose. Place its legs at
+				# safe reach before releasing native gravity, just as the old mount
+				# intended, while a mid-ride plant still deploys progressively.
+				var mount_y := clampf(maxf(FOOT_MOUNT_Y, float(planes[i].targetY)),
+					FOOT_MOUNT_Y, FOOT_RETRACTED_Y)
+				query.motion = chassis.global_basis.y * (mount_y - foot.position.y)
+				var mount_sweep := space.cast_motion(query)
+				var mount_fraction := float(mount_sweep[0]) if mount_sweep.size() >= 2 else 1.0
+				foot.position.y += (mount_y - foot.position.y) * mount_fraction
+				query.motion = Vector3.ZERO
+			foot.set_deferred("disabled", false)
+		if dt <= 0.0:
+			continue
+		var plane: Dictionary = planes[i]
+		if plane.is_empty():
+			continue
+		var target_y := clampf(float(plane.targetY), _foot_reach_limit, FOOT_RETRACTED_Y)
+		var next_y := foot.position.y
+		if both_planted:
+			next_y = maxf(_foot_reach_limit,
+				foot.position.y - minf(common_extension, FOOT_DEPLOY_SPEED * dt))
+		elif not _feet_planted[i]:
+			next_y = minf(foot.position.y,
+				move_toward(foot.position.y, target_y, FOOT_DEPLOY_SPEED * dt))
+
+		if absf(next_y - foot.position.y) < 0.000001:
+			continue # Preserve the native resting manifold; no zero-length shape edit.
+		query.transform = foot.global_transform
+		query.motion = chassis.global_basis.y * (next_y - foot.position.y)
+		if not space.intersect_shape(query, 1).is_empty():
+			# Once the moving frame carries an enabled boot into contact, keep its
+			# real leg length. Moving it away every tick would erase physical support.
+			_feet_planted[i] = true
+			continue
+		var sweep := space.cast_motion(query)
+		var safe_fraction := float(sweep[0]) if sweep.size() >= 2 else 1.0
+		foot.position.y += (next_y - foot.position.y) * safe_fraction
+		_feet_planted[i] = _feet_planted[i] or safe_fraction < 0.999 or absf(foot.position.y - target_y) < 0.0001
+	_feet_requested = true
+	_foot_mount_pending = false
+
+func _foot_support_plane(foot: CollisionShape3D) -> Dictionary:
+	# Each capsule senses its own terrain. Its projected extent includes bank
+	# and the physical hemisphere radius, so this works on ruts and berms.
+	var ray_origin := chassis.global_transform * Vector3(foot.position.x, 0.0, foot.position.z)
+	var ray := PhysicsRayQueryParameters3D.create(ray_origin + Vector3.UP * 0.35,
+		ray_origin - Vector3.UP * 1.4, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(ray)
+	if hit.is_empty():
+		return {}
+	var normal: Vector3 = hit.normal
+	var alignment := normal.dot(chassis.global_basis.y)
+	if alignment < 0.35:
+		return {}
+	var capsule := foot.shape as CapsuleShape3D
+	var extent := capsule.radius + (capsule.height * 0.5 - capsule.radius) * absf(alignment)
+	var ground_point: Vector3 = hit.position
+	return {"targetY": (extent + FOOT_GROUND_CLEARANCE - normal.dot(ray_origin - ground_point)) / alignment,
+		"clearance": normal.dot(foot.global_position - ground_point) - extent,
+		"alignment": alignment}
+
+func _support_boot_targets() -> Array[Vector3]:
+	var targets: Array[Vector3] = []
+	for foot: CollisionShape3D in _feet:
+		# The visual sole is 13cm below its origin; the capsule reaches 14cm
+		# below its centre. Match the same local support surface exactly.
+		targets.append(foot.position + Vector3(0.0, -0.01, -0.01))
+	return targets
 
 func _angles() -> Vector2:
 	var up := chassis.global_basis.y
@@ -1270,11 +1412,44 @@ func _heading_rate() -> float:
 		return clampf(-chassis.angular_velocity.y, -10.0, 10.0)
 	return clampf(-(forward.z * derivative.x - forward.x * derivative.z) / denominator, -10.0, 10.0)
 
+func _crash_support_frame() -> Dictionary:
+	var normal := Vector3.ZERO
+	var velocity := Vector3.ZERO
+	var load := 0.0
+	for wheel: Wheel in [front_wheel, rear_wheel]:
+		if wheel.contact and wheel.normal_load > 1.0:
+			normal += wheel.contact_normal * wheel.normal_load
+			velocity += wheel.ground_velocity * wheel.normal_load
+			load += wheel.normal_load
+	if load > 0.0 and normal.length_squared() > 0.000001:
+		return {"normal": normal.normalized(), "velocity": velocity / load, "loaded": true}
+	# A genuinely fallen frame/rider can touch down with both tires clear.
+	# Without a loaded tire plane, gravity remains the conservative fall frame.
+	return {"normal": Vector3.UP, "velocity": Vector3.ZERO, "loaded": false}
+
+static func landing_observation(velocity: Vector3, basis: Basis, normal: Vector3,
+		ground_velocity: Vector3 = Vector3.ZERO) -> Dictionary:
+	normal = normal.normalized()
+	var relative_velocity := velocity - ground_velocity
+	var side := basis.x - normal * basis.x.dot(normal)
+	# A banked wheel's right axis contains a vertical component. Normal impact
+	# must not become sideways sliding merely because the bike is leaned over.
+	var side_speed := absf(relative_velocity.dot(side.normalized())) if side.length_squared() > 0.000001 else 0.0
+	return {"impactSpeed": maxf(0.0, -relative_velocity.dot(normal)),
+		"sideSpeed": side_speed,
+		"tilt": acos(clampf(basis.y.dot(normal), -1.0, 1.0))}
+
 func _detect_crash(dt: float) -> void:
 	# A fallen bike can rest entirely on the chassis/rider, with both tires
 	# clear of the ground. Such a fall must still start the recovery timer.
-	var grounded := front_wheel.contact or rear_wheel.contact or chassis.get_contact_count() > 0 or fork.get_contact_count() > 0 or rider_body.get_contact_count() > 0
-	var angles := _angles()
+	var support := _crash_support_frame()
+	var grounded := bool(support.loaded) or chassis.get_contact_count() > 0 or fork.get_contact_count() > 0 or rider_body.get_contact_count() > 0
+	var normal: Vector3 = support.normal
+	var support_bank := atan2(-chassis.global_basis.x.dot(normal), chassis.global_basis.y.dot(normal))
+	var support_pitch := asin(clampf((-chassis.global_basis.z).dot(normal), -1.0, 1.0))
+	_crash_observation["supportBank"] = support_bank
+	_crash_observation["supportPitch"] = support_pitch
+	_crash_observation["loadedSupport"] = bool(support.loaded)
 	var speed := chassis.linear_velocity.length()
 	var rear_sliding := bool(_rear_result.get("sliding", false))
 	if rear_sliding and absf(float(_rear_result.get("slipAngle", 0.0))) > 0.16:
@@ -1297,19 +1472,22 @@ func _detect_crash(dt: float) -> void:
 		_last_air_velocity = chassis.linear_velocity
 	else:
 		if not crashed and _air_time > 0.10:
-			var normal := front_wheel.contact_normal if front_wheel.contact else (rear_wheel.contact_normal if rear_wheel.contact else Vector3.UP)
-			var impact_speed := maxf(0, -_last_air_velocity.dot(normal))
-			var landing_tilt := acos(clampf(chassis.global_basis.y.dot(normal), -1, 1))
-			var side_speed := absf(_last_air_velocity.dot(chassis.global_basis.x))
+			var landing := landing_observation(_last_air_velocity, chassis.global_basis, normal, support.velocity)
+			var impact_speed := float(landing.impactSpeed)
+			var landing_tilt := float(landing.tilt)
+			var side_speed := float(landing.sideSpeed)
+			_crash_observation["impactSpeed"] = impact_speed
+			_crash_observation["landingTilt"] = landing_tilt
+			_crash_observation["sideSpeed"] = side_speed
 			if landing_tilt > float(config.Crash.LandingAngle) and impact_speed > float(config.Crash.LandingSpeed):
 				_crash("Poor landing: impact angle")
 			elif side_speed > float(config.Crash.SideLandingSpeed) and impact_speed > 3.0:
 				_crash("Sideways landing")
 		_air_time = 0
 	if not crashed and grounded:
-		if absf(angles.x) > float(config.Crash.GroundRoll):
+		if absf(support_bank) > float(config.Crash.GroundRoll):
 			_crash(_tire_loss_context if not _tire_loss_context.is_empty() else "Loss of balance / low-side")
-		elif angles.y > float(config.Crash.LoopPitch) and not front_wheel.contact:
+		elif support_pitch > float(config.Crash.LoopPitch) and not front_wheel.contact:
 			_crash("Wheelie loop-out")
 		# Grip loss and re-grip are physical events, not an automatic dismount.
 		# Let the human countersteer and the tires recover until the actual
@@ -1345,7 +1523,11 @@ func get_telemetry() -> Dictionary:
 	var angles := _angles()
 	var relative := chassis.global_basis.inverse() * fork.global_basis
 	var speed := chassis.linear_velocity.length()
+	var ground_speed := Vector2(chassis.linear_velocity.x, chassis.linear_velocity.z).length()
+	var local_omega := chassis.global_basis.inverse() * chassis.angular_velocity
 	return {"speed": speed * 3.6, "speedMps": speed,
+		"groundSpeedMps": ground_speed,
+		"pitchRate": local_omega.x, "yawRate": local_omega.y, "rollRate": -local_omega.z,
 		"airAssistTorque": _air_result.get("torque", Vector3.ZERO),
 		"airAssistPower": float(_air_result.get("powerWatts", 0.0)),
 		"airControlBlend": float(_air_result.get("blend", 0.0)),
@@ -1365,6 +1547,12 @@ func get_telemetry() -> Dictionary:
 		"rearSlipAngle": float(rear_tire_state.get("slipAngle", 0)),
 		"frontSurface": front_wheel.surface, "rearSurface": rear_wheel.surface,
 		"frontGrip": float(_front_result.get("grip", 0)), "rearGrip": float(_rear_result.get("grip", 0)),
+		"frontCapacityX": float(_front_result.get("capacityX", 0)), "frontCapacityY": float(_front_result.get("capacityY", 0)),
+		"rearCapacityX": float(_rear_result.get("capacityX", 0)), "rearCapacityY": float(_rear_result.get("capacityY", 0)),
+		"frontUtilization": float(_front_result.get("utilization", 0)), "rearUtilization": float(_rear_result.get("utilization", 0)),
+		"frontSlipPower": float(_front_result.get("slipPower", 0)), "rearSlipPower": float(_rear_result.get("slipPower", 0)),
+		"frontLongitudinalForce": float(_front_result.get("longitudinalForce", 0)), "frontLateralForce": float(_front_result.get("lateralForce", 0)),
+		"rearLongitudinalForce": float(_rear_result.get("longitudinalForce", 0)), "rearLateralForce": float(_rear_result.get("lateralForce", 0)),
 		"frontContact": front_wheel.contact, "rearContact": rear_wheel.contact,
 		"frontLoad": front_wheel.normal_load, "rearLoad": rear_wheel.normal_load,
 		"frontLoadMethod": front_wheel.load_method, "rearLoadMethod": rear_wheel.load_method,
@@ -1387,6 +1575,7 @@ func get_telemetry() -> Dictionary:
 		"riderReferenceTransform": _rider_reference_transform,
 		"riderSupportForce": _rider_force, "riderPostureTorque": _rider_torque,
 		"footDown": bool(controls.footDown), "crashed": crashed, "crashReason": crash_reason,
+		"crashObservation": _crash_observation.duplicate(),
 		"recoveryRemaining": maxf(0, float(config.Crash.RecoveryDelay) - _crash_elapsed) if crashed else 0.0}
 
 func _box_collision(body: RigidBody3D, size: Vector3, origin: Vector3) -> void:

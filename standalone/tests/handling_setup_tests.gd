@@ -21,6 +21,7 @@ func _run() -> void:
 	baseline = JSON.parse_string(FileAccess.get_file_as_string("res://config/bike_250f.json"))
 	_validation()
 	_persistence()
+	await _native_startup()
 	await _native_menu()
 	print("Handling setup: %d checks, %d failures" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
@@ -109,6 +110,54 @@ func _persistence() -> void:
 	raw.close()
 	check(not bool(Setup.load_file(path, baseline).ok), "Malformed local config fails safely without partial settings")
 	DirAccess.remove_absolute(absolute)
+
+func _native_startup() -> void:
+	# A file reload alone misses construction order: entering the tree runs
+	# Bike._ready immediately and builds the physical assembly. Exercise the
+	# shipped scene with its actual user file before that happens.
+	var paths: Array[String] = ["user://handling.cfg", "user://preferences.cfg", "user://controller_bindings.cfg"]
+	var saved_files: Dictionary = {}
+	for path: String in paths:
+		if FileAccess.file_exists(path):
+			saved_files[path] = FileAccess.get_file_as_bytes(path)
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	var values := Setup.snapshot(baseline)
+	values.Tire.Front.GripScale = 0.65
+	values.VirtualRider.IntentResponse = 0.19
+	values.RiderAnimation.CornerTransitionTime = 0.23
+	check(Setup.save_file(paths[0], values) == OK, "Startup integration writes a nondefault player setup")
+	var packed := load("res://scenes/main.tscn") as PackedScene
+	var game: Node3D = packed.instantiate()
+	root.add_child(game)
+	await process_frame
+	check(is_equal_approx(Setup.value_at(game.bike.config, "Tire.Front.GripScale", 1.0), 0.65)
+		and is_equal_approx(game.bike.config.VirtualRider.IntentResponse, 0.19),
+		"Real main scene builds its first native assembly from the saved tire and steering setup")
+	check(is_equal_approx(game.bike._rider_visual._animation_settings.CornerTransitionTime, 0.23),
+		"Saved rider timing reaches the first constructed visual rig")
+	check(game.bike.config.Drive == baseline.Drive and game.bike.config.Suspension == baseline.Suspension,
+		"Startup setup preserves unrelated drivetrain and suspension values")
+	game.queue_free()
+	await process_frame
+	for invalid_format: bool in [false, true]:
+		var invalid := ConfigFile.new()
+		invalid.set_value("handling", "version", Setup.FORMAT_VERSION + 1 if invalid_format else Setup.FORMAT_VERSION)
+		invalid.set_value("handling", "values", {"Tire": {"Front": {"GripScale": 0.65}}, "Engine": {"IdleRPM": 1}})
+		invalid.save(paths[0])
+		game = packed.instantiate()
+		root.add_child(game)
+		await process_frame
+		check(game.bike.config == baseline,
+			"Real startup rejects %s setup atomically and builds the shipped defaults" % ("unsupported-version" if invalid_format else "mixed unknown-field"))
+		game.queue_free()
+		await process_frame
+	paused = false
+	for path: String in paths:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+		if saved_files.has(path):
+			var restore := FileAccess.open(path, FileAccess.WRITE)
+			restore.store_buffer(saved_files[path])
+			restore.close()
 
 func _native_menu() -> void:
 	var saved_files: Dictionary = {}

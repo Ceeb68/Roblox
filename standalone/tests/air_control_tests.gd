@@ -37,7 +37,7 @@ func _angles() -> Vector3:
 	var t: Dictionary = bike.get_telemetry()
 	return Vector3(float(t.pitch), _heading(), float(t.roll))
 
-func _fixture(hz: int, strength := 1.0, mode := "virtual_rider") -> void:
+func _fixture(hz: int, strength := 1.0, mode := "virtual_rider", global_strength := 1.0) -> void:
 	if is_instance_valid(bike):
 		bike.queue_free()
 		await process_frame
@@ -46,6 +46,7 @@ func _fixture(hz: int, strength := 1.0, mode := "virtual_rider") -> void:
 	if not setup.has("AirControl"):
 		setup.AirControl = {}
 	setup.AirControl.Strength = strength
+	setup.Assistance.Strength = global_strength
 	bike = Bike.new()
 	bike.configure(setup)
 	root.add_child(bike)
@@ -99,16 +100,38 @@ func _module_guards() -> void:
 		and local_torque.length() <= float(Air.DEFAULTS.MaxTotalTorque) + 0.001,
 		"Air assistance respects every axis and combined torque budget")
 	_check(float(result.barRequest) == -1.0 and float(result.bodySideRequest) == -1.0 \
-		and float(result.twistRequest) == -1.0 and float(result.riderLeanRequest) < 0.0,
+		and float(result.twistRequest) == 1.0 and float(result.riderLeanRequest) < 0.0,
 		"One virtual air task gives handlebars and rider coherent counterstroke directions")
+	var neutral: RefCounted = Air.new()
+	var neutral_result: Dictionary
+	for _i in range(120):
+		neutral_result = neutral.update(frame, {}, 1.0 / 240.0, {})
+	_check(Vector3(neutral_result.torque) == Vector3.ZERO,
+		"Neutral controls preserve native rotational momentum with no external air torque")
+	neutral_result = neutral.update(frame, {"bodySide": 1.0}, 1.0 / 240.0, {})
+	_check(is_zero_approx(Vector3(neutral_result.localTorque).x) and is_zero_approx(Vector3(neutral_result.localTorque).z),
+		"Commanding yaw does not silently damp uncommanded pitch or roll")
+	for _i in range(120):
+		neutral_result = neutral.update(frame, {}, 1.0 / 240.0, {"NeutralDampingStrength": 1.0})
+	_check(Vector3(neutral_result.torque).length() > 0.0 and float(neutral_result.powerWatts) < 0.0,
+		"Optional neutral damping is explicit, configurable and dissipative")
 	frame.grounded = true
 	result = task.update(frame, controls, 1.0 / 240.0, {})
 	_check(Vector3(result.torque) == Vector3.ZERO and not bool(result.active),
 		"Loaded tire contact immediately removes external air torque")
 	frame.grounded = false
-	result = task.update(frame, controls, 1.0 / 240.0, {"Strength": 0.0})
-	_check(Vector3(result.torque) == Vector3.ZERO and float(result.blend) == 0.0,
-		"Zero assistance preserves the original local muscle task and native airborne dynamics")
+	var unassisted: RefCounted = Air.new()
+	var assisted: RefCounted = Air.new()
+	var assisted_result: Dictionary
+	for _i in range(120):
+		result = unassisted.update(frame, controls, 1.0 / 240.0, {"Strength": 0.0})
+		assisted_result = assisted.update(frame, controls, 1.0 / 240.0, {"Strength": 1.0})
+	_check(Vector3(result.torque) == Vector3.ZERO and not bool(result.active) and float(result.blend) > 0.99,
+		"Zero external assistance retains finite virtual-rider perception and pose control")
+	_check(float(result.blend) == float(assisted_result.blend) and result.barRequest == assisted_result.barRequest \
+		and result.bodySideRequest == assisted_result.bodySideRequest and result.twistRequest == assisted_result.twistRequest \
+		and result.pitchPoseRequest == assisted_result.pitchPoseRequest and result.riderLeanRequest == assisted_result.riderLeanRequest,
+		"Tuning external air torque never changes the virtual rider's input polarity or target pose")
 	frame.enabled = false
 	result = task.update(frame, controls, 1.0 / 240.0, {})
 	_check(Vector3(result.torque) == Vector3.ZERO and float(result.blend) == 0.0,
@@ -147,10 +170,10 @@ func _maneuver(hz: int, axis: String, direction: float) -> Dictionary:
 	var finite := true
 	var settings: Dictionary = bike.config.get("AirControl", {})
 	var throw_steps := roundi(0.55 * hz)
-	var return_steps := roundi(0.55 * hz)
 	var native_start := Engine.get_physics_frames()
-	for i: int in range(roundi(1.5 * hz)):
-		var command := direction if i < throw_steps else (-direction if i < throw_steps + return_steps else 0.0)
+	var duration := 1.5
+	for i: int in range(roundi(duration * hz)):
+		var command := direction if i < throw_steps else 0.0
 		var packet := {"clutch": 1.0, "footDown": false, "standing": true,
 			"steer": 0.0, "bodySide": 0.0, "bodyForward": 0.0, "lean": 0.0, "throttle": 0.0}
 		if axis == "whip":
@@ -158,7 +181,19 @@ func _maneuver(hz: int, axis: String, direction: float) -> Dictionary:
 			packet.bodySide = command
 		else:
 			packet[axis] = command
-		opposite_command_seen = opposite_command_seen or command * direction < 0.0
+		if i >= throw_steps:
+			# The test pilot deliberately brakes residual rotation. A centred
+			# stick now preserves native momentum rather than doing this work.
+			# This feedback belongs to the TEST PILOT, never the shipped task.
+			var error := _angles() - initial
+			error.y = wrapf(error.y, -PI, PI)
+			var state: Dictionary = bike.get_telemetry()
+			var local_omega: Vector3 = bike.chassis.global_basis.transposed() * bike.chassis.angular_velocity
+			packet.bodyForward = clampf(error.x * 4.0 + local_omega.x * 0.4, -1.0, 1.0)
+			packet.steer = clampf(-error.z * 4.0 - float(state.bankRate) * 0.4, -1.0, 1.0)
+			packet.bodySide = clampf(-error.y * 4.0 - float(state.headingRate) * 0.4, -1.0, 1.0)
+		var actual_command: float = packet.steer + packet.bodySide if axis == "whip" else packet[axis]
+		opposite_command_seen = opposite_command_seen or actual_command * direction < -0.02
 		bike.set_controls(packet)
 		await _tick()
 		var angle := _angles() - initial
@@ -185,13 +220,15 @@ func _maneuver(hz: int, axis: String, direction: float) -> Dictionary:
 		for body: RigidBody3D in _bodies():
 			finite = finite and body.global_transform.is_finite() and body.linear_velocity.is_finite() and body.angular_velocity.is_finite()
 	var label := "%s %+.0f at %dHz" % [axis, direction, hz]
-	_check(Engine.get_physics_frames() - native_start == roundi(1.5 * hz),
+	_check(Engine.get_physics_frames() - native_start == roundi(duration * hz),
 		label + " controls and observations cover exactly1.5 native seconds independently of render rate")
 	_check(finite and not bike.crashed and air_observations > hz,
 		label + " remains a finite five-body native flight")
 	_check(budget_excess < 0.001 and power_excess < 0.001 and peak_torque > 10.0,
 		label + " uses useful assistance inside its declared torque/power budgets")
 	_check(unsupported_tire_force < 0.000001, label + " never invents airborne tire force")
+	_check(absf(recovered.x) < deg_to_rad(12.0) and absf(recovered.y) < deg_to_rad(8.0) and absf(recovered.z) < deg_to_rad(10.0),
+		label + " deliberate coordinated counter-input restores all three usable landing angles", str(recovered))
 	if axis == "bodyForward":
 		_check(thrown.x * direction < -deg_to_rad(12.0), label + " produces prompt useful signed pitch control", str(thrown))
 		_check(opposite_command_seen and absf(recovered.x) < absf(thrown.x) * 0.8,
@@ -218,16 +255,60 @@ func _maneuver(hz: int, axis: String, direction: float) -> Dictionary:
 	return {"throw": thrown, "return": recovered}
 
 func _native_bypass() -> void:
-	for mode: String in ["virtual_rider", "direct"]:
-		await _fixture(240, 0.0 if mode == "virtual_rider" else 1.0, mode)
+	for settings: Array in [["virtual_rider", 0.0, 1.0], ["virtual_rider", 1.0, 0.0], ["direct", 1.0, 1.0]]:
+		var mode: String = settings[0]
+		await _fixture(240, float(settings[1]), mode, float(settings[2]))
 		var peak := 0.0
 		var blend := 0.0
-		for _i in range(180):
-			bike.set_controls({"clutch": 1.0, "footDown": false, "standing": true, "bodySide": 1.0, "steer": 1.0})
+		var hip_yaw_impulse := 0.0
+		var starting_angles := _angles()
+		for i in range(180):
+			bike.set_controls({"clutch": 1.0, "footDown": false, "standing": true,
+				"bodySide": 1.0, "steer": 1.0, "bodyForward": 0.4, "lean": 0.4})
 			await _tick()
 			peak = maxf(peak, Vector3(bike._air_result.get("torque", Vector3.ZERO)).length())
 			blend = maxf(blend, float(bike._air_result.get("blend", 0.0)))
-		_check(peak == 0.0 and blend == 0.0, mode + " bypasses the external air task when requested")
+			if i < 60:
+				hip_yaw_impulse += (-bike._rider_torque).dot(bike.chassis.global_basis.y) / 240.0
+		_check(peak == 0.0, str(settings) + " supplies no external air torque")
+		if mode == "virtual_rider":
+			_check(blend > 0.99 and bike._body_side < -0.2 and bike._body_lean < -0.2 \
+				and bike._body_forward < -0.2 and bike._steering_target < -0.1 and bike._body_twist > 0.2,
+				str(settings) + " keeps airborne bar, hip and fore/aft input polarity when extra assistance is zero")
+			_check(hip_yaw_impulse < -0.5, str(settings) + " zero-assistance native hip reaction still helps requested bike yaw", str(hip_yaw_impulse))
+			var movement := _angles() - starting_angles
+			movement.y = wrapf(movement.y, -PI, PI)
+			_check(movement.z > deg_to_rad(5.0) and movement.y > deg_to_rad(5.0) and movement.x < -deg_to_rad(2.0),
+				str(settings) + " native gyroscopic and rider reactions physically roll/yaw right and pitch down as requested", str(movement))
+		else:
+			_check(blend == 0.0 and bike._body_side > 0.2 and bike._body_lean > 0.2 and bike._body_forward > 0.2,
+				"Direct mode retains raw manual human inputs with no virtual pose remapping")
+		bike.reset_bike(Transform3D(Basis.IDENTITY, Vector3(0, 100, 0)), true)
+		_check(bike._air_result.is_empty() and bike._air_pitch_blend == 0.0 and bike._air_control._blend == 0.0,
+			str(settings) + " reset clears the virtual perception and external assistance state immediately")
+
+func _native_hip_reactions() -> void:
+	# Disable ONLY the external torque budget. The shipped air pose task,
+	# real torso, paired hip muscles, wheel gyroscopes and joints remain live.
+	# Checking the measured native reaction catches a sign error that a
+	# stronger external yaw controller could otherwise conceal.
+	var saved_budget: float = cfg.AirControl.MaxTotalTorque
+	cfg.AirControl.MaxTotalTorque = 0.0
+	for direction: float in [-1.0, 1.0]:
+		await _fixture(240)
+		var yaw_impulse := 0.0
+		var external_peak := 0.0
+		for _i in range(60):
+			bike.set_controls({"clutch": 1.0, "footDown": false, "standing": true,
+				"bodySide": direction, "steer": 0.0, "bodyForward": 0.0})
+			await _tick()
+			yaw_impulse += (-bike._rider_torque).dot(bike.chassis.global_basis.y) / 240.0
+			external_peak = maxf(external_peak, Vector3(bike._air_result.get("torque", Vector3.ZERO)).length())
+		_check(yaw_impulse * direction < -0.5,
+			"Native hip twist supplies a useful bike-yaw impulse in the requested direction", str(yaw_impulse))
+		_check(external_peak == 0.0 and bike._body_twist * direction > 0.2,
+			"Hip reaction comes from finite physical torso counter-motion with external air torque disabled")
+	cfg.AirControl.MaxTotalTorque = saved_budget
 
 func _real_jump_whips() -> void:
 	# This fixture uses the actual shipped triangle track, normal gravity,
@@ -382,6 +463,7 @@ func _run() -> void:
 						and Vector3(result.return).distance_to(earlier.return) < deg_to_rad(6.0),
 						key + " converges across 240 and 480 native physics updates")
 	await _native_bypass()
+	await _native_hip_reactions()
 	await _real_jump_whips()
 	var controller_script: Script = Bike
 	var air_script: Script = Air

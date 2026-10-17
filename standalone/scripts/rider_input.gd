@@ -121,7 +121,10 @@ func update_auto_feet(delta: float, riding_state: Dictionary) -> void:
 	# This only changes real boot collision/support state. It adds no invisible
 	# balancing force or airborne support.
 	var dt := clampf(delta, 0.0, 0.1)
-	var speed := absf(float(riding_state.get("speedMps", 0.0)))
+	# A suspension/boot impact can move the stopped chassis vertically while
+	# both tires still support it. Only travel along the ground should retract
+	# its support for riding; contact dwell still handles genuine takeoff.
+	var speed := absf(float(riding_state.get("groundSpeedMps", riding_state.get("speedMps", 0.0))))
 	var front_contact := bool(riding_state.get("frontContact", false))
 	var rear_contact := bool(riding_state.get("rearContact", false))
 	if not is_finite(speed):

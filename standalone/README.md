@@ -2,7 +2,7 @@
 
 A Windows motocross prototype built with Godot 4.6.3 and Jolt Physics. All dynamics use metres, kilograms, seconds and 9.81 m/s² gravity. Nothing under `standalone/` depends on Roblox.
 
-Version 0.6 targets responsive, planted riding with approximately 75% simulation and 25% forgiveness. That is a handling philosophy, not a numerical blend. The five-body motorcycle, independent tires, manual drivetrain and suspension remain physical; explicitly bounded gameplay assistance makes balance and airborne correction more accessible. This is original code and fictional engineering calibration, with no proprietary MX Bikes/MX Simulator code or assets.
+Version 0.7 prioritizes the physical riding foundation: continuous track contact, coherent tire budgets, one countersteering/lean task, correctly loaded hydraulic damping and fair contact-plane crash observation. Explicit, configurable low-speed/active-air/brief landing assistance provides accessibility. Centered air inputs preserve native rotation by default. This is original code and fictional engineering calibration; no proprietary MX Bikes/MX Simulator code or assets are used.
 
 ## Ride and configure controls
 
@@ -21,7 +21,7 @@ The bike starts in neutral with clutch pulled and feet planted. Select first wit
 | Standing / seated | C | A |
 | Scrub while leaning on a rising face | Hold F | Hold X |
 | Recover / starter | R / T | Y / left stick click |
-| Help / suspension setup | H / U | Right stick click / HUD setup button |
+| Help / suspension setup | H / U | Right stick click / Start → Suspension setup |
 | Pause | Escape | Start |
 | Chase / helmet camera | M | B / Circle |
 
@@ -33,21 +33,18 @@ Feet plant at grounded stops and can dab during a loaded walking-speed loss of b
 
 ## What changed underneath the handling
 
-The most serious traction defect was a contact-phase mismatch: the native engine's completed-step pressure patch was combined with the next wheel pose. At riding speed that created a false trailing lever and phantom lateral tread motion when wheel spin was evaluated. The adapter now transports the pressure patch by the measured hub translation before using it consistently for tread velocity, effective radius and applied force/torque. A pressure patch is not a rotating rubber point, so it is not spun around the axle. Missing/reset history invalidates the phase correction. This removes the artificial slip source instead of disguising it with more friction.
+The [engineering report](PHYSICS_OVERHAUL.md) records the architecture, controlled comparisons and exact fixes. The important changes are:
 
-The earlier shared tire calibration also needed excessive small-slip displacement to establish a line. Front and rear now have their own lateral/longitudinal stiffness and relaxation distances. Increasing small-slip stiffness changes how quickly a tire develops force; it does not increase the unchanged surface-friction peak. Drive and braking share a progressive traction ellipse with lateral force, so ordinary corners stay planted while hard exits can spin the rear. Surface, normal load, camber and the two axle states remain independent.
+- Visual soil boundaries previously split native collision bodies and caused false wheel impacts/support loss. One continuous main-road collider now resolves soil at the real contact point. Tire friction peaks and body masses remain unchanged.
+- One bounded lean-rate task replaces the conflicting deliberate/neutral laws. Neutral senses travel course, removes historical position pursuit and stops feeding countersteering's initial chassis yaw back into a competing command. The finite fork/frame actuator and independent tire forces still produce every turn.
+- Suspension damping now accounts for a positively supported wheel's constrained normal mobility, with unilateral release when rebound would unload it. Free-air strut forces remain an internal pair.
+- Support boots deploy without penetration and keep real contact through rebound. Their intended guard friction is separate from the zero-friction native tire material. Visual legs follow the deployed support geometry through the existing continuous IK solver.
+- Crash severity uses the support plane and its velocity. Vertical impact no longer becomes false sideways speed merely because the bike is banked; severe impacts, loop-outs and genuine falls still crash.
+- Hip yaw now helps the requested bike yaw. Centered air axes apply zero external torque by default; active rate corrections remain bounded by real assembly inertia, torque and power. Zero assistance retains the same virtual-rider input mapping; Direct remains manual.
+- Default landing assistance lasts 0.30s and damps rate, with zero pitch-return stiffness. A longer pitch-return spring is available only as an explicit tuning choice. The native suspension, tires and finite rider/bar reactions remain active throughout.
+- Saved handling is configured before the physical bike is built. F8 displays actual physics observations and F9 records every native riding step to a local CSV.
 
-Ground steering uses the existing finite fork/frame actuator. Deliberate bank changes use a bounded roll-rate task rather than relying solely on a heavily damped angle spring. Actual rider COM determines counterbalance; speed, available grip and wheel support determine feasible lean and steering. Neutral line following has separate, calmer response. The bars still countersteer to initiate lean and steer into the corner; neither the chassis transform nor travel direction is assigned. A separately bounded low-speed balance torque is the explicit walking-speed gameplay allowance, and requires actual loaded support.
-
-The previous airborne rider/bar reactions were too weak and coupled to provide useful independent roll/yaw control. `air_control.gd` now requests pitch, roll and yaw **rates** using the measured five-body inertia. It preserves native wheel spin, gyroscopic reactions, rider counter-motion and drivetrain pitch reactions. The added external gameplay torque has separate axis, total-torque and power limits, smooth activation, speed-dependent authority, neutral rotational damping and stronger deliberate counter-input. This is assistance, not a claim that a free rider can create external angular momentum. It never chooses a world-up attitude, takeoff heading or landing orientation, and never applies a flight-direction force. Strength zero and direct mode disable it.
-
-A whip combines actual roll and yaw from steering/body inputs; reversing those inputs unwinds the native bodies. A scrub combines real bike lean with the held scrub input on a positively loaded ascending face. The virtual rider looks ahead at actual terrain geometry for the crest, then physically crouches while the suspension absorbs extension through passive damping. This keeps absorption active near takeoff instead of crouching so early that the body rebounds before the lip. It uses the observed face/crest and travel speed, not hardcoded jump coordinates. The compressed takeoff posture carries into flight without adding downward airborne force. During absorption the existing paired rider support blends toward 0.6 of critical damping, calculated from actual vertical stiffness and frame/rider reduced mass. This controls torso recoil while allowing a quick downward absorption stroke. The maximum crouch target is 0.28 m, with a 0.24s terrain lookahead and passive rebound scale 3.5; observed takeoff movement is smaller than the full target. The matched whole-assembly COM tests distinguish trajectory change from merely lowering the rider mesh.
-
-Suspension now separates low/high shaft-speed hydraulic response and progressive bottoming damping. Analytical damper impulses use the actual axial effective mass, avoiding the energy injection possible when an explicit high damping force reverses a light axle within one step. Slow weight-transfer control, spring/preload, rebound and elastic bottom stops stay independent. These are effective wheel rates: the rear is a slider approximation, not a modeled production linkage.
-
-Landing regains tire force through actual native load and tread relaxation. The finite handlebar catch still uses positive front support. A separate explicit landing aid lasts at most 1.25s after a genuine flight and loaded return, with a 100 N·m combined torque cap. It damps excess roll rate relative to the player's requested lean rate and catches terrain-relative pitch beyond an 8° deadband; full manual pitch endpoints bypass the pitch catch. It supplies no yaw correction, unsupported torque, extra friction or normal force. Global and landing strengths scale the budget. This is declared gameplay assistance through torque, not an assigned pose. The same suspension/rider/drivetrain remain active throughout.
-
-Rider presentation now has interruptible continuous filters for posture, physical support and cornering legs. Leg selection follows actual bank, speed, supported riding and seating. A reversal blends from the current leg positions rather than restarting an animation. Arm/leg inverse kinematics keep hands at real fork grips and boots at peg or leg-out targets. The torso/helmet follow the independent massive rider. One pose solver owns each limb, avoiding competing animations.
+Whips remain actual roll/yaw and rider/fork movement; counter-input recovers them. Scrubs remain a loaded-face physical rider/suspension absorption task with no airborne downward force. The existing manual engine, clutch, gears, brakes, wheel pitch reactions, recovery, cameras and controller bindings retain their single integrated paths.
 
 ## Physics architecture
 
@@ -88,14 +85,16 @@ The complete engineering source calibration is `config/bike_250f.json`; editing 
 | Low-speed balance | `Assistance.Strength`, `LowSpeedStrength`, `LowSpeedMaxTorque`, `LowSpeedBalanceStiffness`, `LowSpeedBalanceDamping` | Global assistance scales ground, air and landing helpers; LowSpeedStrength isolates loaded walking-speed help |
 | Suspension | `Suspension.Front/Rear`: `SpringRate`, `Compression`, `Rebound`, `HighSpeedCompression`, `HighSpeedRebound`, `*KneeSpeed`, `BottomOutCompression`, `BottomOutTravel`, `Preload` | Effective N/m, N·s/m, m/s and metres; the hydraulic cone occupies the last 0.075 m; independent wheel setup |
 | Air pitch / roll / yaw | `AirControl.PitchRate`, `RollRate`, `YawRate`, `RateResponse` | Commanded rad/s and approach time; real inertia determines effort |
-| Air rotational damping | `AirControl.NeutralDampingTime`, axis `Max*Torque`, `MaxTotalTorque`, `MaxPower`, `MaxDissipationPower` | Time and explicit torque/power budget, not a velocity clamp |
+| Optional neutral air damping | `AirControl.NeutralDampingStrength` (default 0), `NeutralDampingTime`, axis `Max*Torque`, `MaxTotalTorque`, `MaxPower`, `MaxDissipationPower` | Time and explicit torque/power budget, not a velocity clamp |
 | Whip throw / counter | `AirControl.WhipResponse`, `WhipRecovery` | Roll/yaw command rates and deliberate opposite-input recovery |
 | Air assistance amount | `AirControl.Strength` | Scale the bounded external task; zero keeps native rider/gyro/drivetrain reactions |
 | Scrub | `ScrubControl.MaxCrouch`, `MaxReboundScale`, `MinFace`, `FullFace`, `CrestLookaheadTime`, `LegDampingRatio` | Metres, passive absorption scale, face angles in radians, geometric lead time in seconds and damping ratio against the actual reduced mass |
-| Landing help | `Assistance.LandingStrength`, `LandingTime`, `LandingMaxTorque`; `VirtualRider.MaxLandingCatchTorque`, `LandingCatchTime` | Scale the loaded pitch/roll torque window and finite steering catch |
+| Landing help | `Assistance.LandingStrength`, `LandingTime` (0.30s), `LandingPitchStiffness` (0), `LandingMaxTorque`; `VirtualRider.MaxLandingCatchTorque`, `LandingCatchTime` | Brief loaded rate damping and finite steering catch; nonzero pitch-return stiffness is optional assistance |
 | Rider blending | `RiderAnimation.TransitionTime`, `CornerTransitionTime`, `SupportTransitionTime`, `Strength` | Seconds and visual leg-out amount; does not change grip or forces |
 
-For more simulation, try gameplay and air assistance strengths around 0.65, keeping grip calibration unchanged initially; zero disables each extra task. For slightly more forgiveness than the default, try neutral rotational decay 0.40s instead of 0.55s and whip counter-input 1.25 instead of 1.15. These are suggested experiments, not separately certified presets. Increasing grip everywhere changes the traction limit and is not a substitute for better steering. Change one system at a time and rerun its native tests plus the full lap. The intended default assistance strength is not a literal 25% physics calculation.
+For more simulation, lower global/air/landing assistance while leaving tire calibration unchanged initially; keep neutral damping and landing pitch-return stiffness at zero. For more forgiveness, deliberately enable a small neutral damping strength or extend the landing damping window. Nonzero pitch-return stiffness adds an explicit attitude spring. These are tuning choices, not independently certified presets. Change one system at a time and compare F8 observations or F9 recordings before rerunning its native tests and a full lap.
+
+F8 starts hidden. F9 starts/stops CSV capture under `user://telemetry/` and displays the saved path. Rows include simulation time/frame, applied inputs, actual loads, tire forces/slip/capacity, suspension, angular rates, assistance and crash observations. Menus and paused time are omitted. The files stay on this computer.
 
 ## Circuit, validation and builds
 
