@@ -1,12 +1,12 @@
 # Dirtline MX
 
-A standalone Windows motocross prototype built with Godot 4.6.3 and Jolt Physics. Version 0.7 repairs terrain-induced grip loss, conflicting steering feedback, loaded suspension damping, unsafe support-foot contacts and false landing crashes. Air controls preserve neutral momentum, and landing assistance is a brief configurable rate catch. The 873 m circuit, physical rider, whips/scrubs, helmet view, automatic recovery and customizable controller bindings remain included.
+A standalone Windows motocross prototype built with Godot 4.6.3 and Jolt Physics. Version 0.7.1 fixes two reproduced low-speed defects: live input could retract pending support feet, and steering requested a nonzero bank at a stop. F8 now identifies the loaded build and effective handling setup. Air controls preserve neutral momentum, and landing assistance is a brief configurable rate catch. The 873 m circuit, physical rider, whips/scrubs, helmet view, automatic recovery and customizable controller bindings remain included.
 
 ![Dirtline MX physics prototype](downloads/DirtlineMX-preview.png)
 
 ## Play on Windows
 
-1. [Download Dirtline MX v0.7.0 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.7.0.zip).
+1. [Download Dirtline MX v0.7.1 for Windows](https://github.com/Ceeb68/Roblox/raw/refs/heads/main/downloads/DirtlineMX-Windows-v0.7.1.zip).
 2. Right-click the ZIP and choose **Extract All**.
 3. Open the extracted folder and double-click **DirtlineMX.exe**. Keep its `.pck` file beside it.
 4. The bike starts in neutral with the clutch pulled and feet down. Press **E** for first, hold **W** to build revs, then hold **B** to release the clutch gradually. Feet lift automatically during launch and plant when you stop.
@@ -14,6 +14,8 @@ A standalone Windows motocross prototype built with Godot 4.6.3 and Jolt Physics
 Use **A/D** or the left stick to request bike lean; the virtual rider countersteers through the handlebars. **Z/X** moves the rider's upper body independently. In the air, use the left stick for roll and the right stick for pitch/yaw; counter-input returns a whip. Hold **F / controller X** while leaning on an ascending jump face to scrub. Use **M / controller B** for helmet view, **H** for help and **U** for suspension setup. Open **Escape / Start → Settings + controller binds → Controller bindings** to customize controls. No Roblox installation or game editor is needed to play.
 
 If you previously selected manual handlebars, choose **Virtual rider** in Settings to use lean control. Park and use **Handling setup → Restore tested defaults → Apply and ride** to compare the shipped setup; saved tuning now survives restarting correctly. **F8** displays physics telemetry and **F9** records a local CSV.
+
+For this comparison, F8 should identify **v0.7.1**, **virtual_rider**, **DEFAULTS**, front/rear grip scales **1.00 / 1.00**, and input response **0.070 s**. Extract the complete update into a new folder: the matching `.pck` contains the changed game. [The runtime diagnosis](standalone/HANDLING_DIAGNOSIS.md) explains what was proved and the limited scope of this correction.
 
 After a crash, bike and rider remount automatically after **one second** near the crash site. **R / controller Y** remounts immediately. Recovery resets the rider's physical and visible pose, selects neutral, plants feet and clears movement; release any held controls before using them again. Unsafe ground falls back to the lab spawn.
 

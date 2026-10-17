@@ -2,7 +2,7 @@
 
 A Windows motocross prototype built with Godot 4.6.3 and Jolt Physics. All dynamics use metres, kilograms, seconds and 9.81 m/s² gravity. Nothing under `standalone/` depends on Roblox.
 
-Version 0.7 prioritizes the physical riding foundation: continuous track contact, coherent tire budgets, one countersteering/lean task, correctly loaded hydraulic damping and fair contact-plane crash observation. Explicit, configurable low-speed/active-air/brief landing assistance provides accessibility. Centered air inputs preserve native rotation by default. This is original code and fictional engineering calibration; no proprietary MX Bikes/MX Simulator code or assets are used.
+Version 0.7.1 makes a focused correction after auditing the actual public build and input path: deferred foot activation now survives immediate input packets, and feasible bank vanishes with true speed during a stop. The existing F8 overlay identifies the loaded version and effective setup. [The follow-up diagnosis](HANDLING_DIAGNOSIS.md) records the controlled comparisons and remaining handling limits. Explicit, configurable low-speed/active-air/brief landing assistance provides accessibility. Centered air inputs preserve native rotation by default. This is original code and fictional engineering calibration; no proprietary MX Bikes/MX Simulator code or assets are used.
 
 ## Ride and configure controls
 

@@ -80,6 +80,9 @@ var _feet: Array[CollisionShape3D] = []
 var _feet_requested: bool = false
 var _foot_mount_pending: bool = true
 var _feet_planted: Array[bool] = [false, false]
+# Physics shape changes commit later. Track the requested activation edge,
+# rather than treating delayed disabled readback as a second deployment.
+var _feet_enabled: Array[bool] = [false, false]
 const FOOT_RETRACTED_Y: float = -0.10
 const FOOT_MOUNT_Y: float = -0.62
 const FOOT_MAX_EXTENSION_Y: float = -0.72
@@ -337,6 +340,7 @@ func _reset_models() -> void:
 	_foot_mount_pending = true
 	_feet_requested = false
 	_feet_planted = [false, false]
+	_feet_enabled = [false, false]
 	for foot: CollisionShape3D in _feet:
 		foot.position.y = FOOT_RETRACTED_Y
 		foot.set_deferred("disabled", true)
@@ -825,7 +829,9 @@ func _apply_steering(input: Dictionary, dt: float) -> void:
 			contact_height = rear_wheel.contact_position.y
 		var height := maxf(0.4, _sprung_com().y - contact_height)
 		var max_angle := float(config.Steering.MaxAngle)
-		var low_speed_lean := atan(speed_squared * tan(max_angle * 0.85) / (9.81 * wheelbase))
+		# This is a feasible bank request, so it must vanish with actual speed.
+		# The separate feedback denominator stays bounded near zero velocity.
+		var low_speed_lean := atan(forward_speed * forward_speed * tan(max_angle * 0.85) / (9.81 * wheelbase))
 		var front_surface: Dictionary = config.Surfaces.get(front_wheel.surface, config.Surfaces.dirt)
 		var rear_surface: Dictionary = config.Surfaces.get(rear_wheel.surface, config.Surfaces.dirt)
 		# Feasible requested bank uses the same independent tire capacities as
@@ -1268,9 +1274,11 @@ func _update_feet(dt: float = 0.0) -> void:
 		_foot_mount_pending = false
 		_foot_reach_limit = FOOT_MAX_EXTENSION_Y
 		_feet_planted = [false, false]
-		for foot: CollisionShape3D in _feet:
-			if not foot.disabled:
+		for i: int in range(_feet.size()):
+			var foot: CollisionShape3D = _feet[i]
+			if _feet_enabled[i] or not foot.disabled:
 				foot.set_deferred("disabled", true)
+			_feet_enabled[i] = false
 			if not is_equal_approx(foot.position.y, FOOT_RETRACTED_Y):
 				foot.position.y = FOOT_RETRACTED_Y
 		return
@@ -1299,7 +1307,7 @@ func _update_feet(dt: float = 0.0) -> void:
 		query.collision_mask = 1
 		query.transform = foot.global_transform
 		query.margin = 0.0
-		if not _feet_requested or foot.disabled:
+		if not _feet_enabled[i]:
 			# Enabling the old fully extended capsule at a settled chassis inserted
 			# 6cm into the soil and launched the frame. A new physical foot starts
 			# retracted and may only become collidable in clear space.
@@ -1319,6 +1327,7 @@ func _update_feet(dt: float = 0.0) -> void:
 				foot.position.y += (mount_y - foot.position.y) * mount_fraction
 				query.motion = Vector3.ZERO
 			foot.set_deferred("disabled", false)
+			_feet_enabled[i] = true
 		if dt <= 0.0:
 			continue
 		var plane: Dictionary = planes[i]

@@ -1,4 +1,29 @@
-# Version 0.7 native validation
+# Version 0.7.1 focused runtime follow-up
+
+The current [runtime diagnosis](HANDLING_DIAGNOSIS.md) explains why the previous release did not establish a noticeable ordinary-cornering improvement, proves the active main-scene parameter path and documents the two low-speed corrections. The v0.7 measurements below remain historical evidence, not current source or package hashes.
+
+Current source identities:
+
+```text
+scripts/bike_controller.gd c3a3d721991f72f13e7bfe580ac6bd53c084c28fbf66639f625e3f1486b15abf
+scripts/game.gd            cb50c6fd0654894b8e8386e79f1b673a921616ee35e5adb69b95bfbd278f99b9
+config/bike_250f.json     a12c90e11cc5384e3ace001ad9893962b28b5be6f73e74604b16a7d64db144e0
+```
+
+The new main-scene A/B/A parameter experiment passes 45 checks; actual startup/settings provenance passes 27; repeated input/reset and held-turn stops pass 30 at each of 240 and 480 Hz. A separate 12-check light-front-brake-only test makes the stop protocol reproducible with default Xbox controls: frozen v0.7 falls in the right turn, while the corrected source reaches supported stops in both directions. This does not establish subjective Windows/controller feel or a general grip improvement.
+
+The first broad follow-up run stopped on an overly specific crash label in its deliberate backward-power case. All 18 positive jump/runout cases passed. The negative oracle now also accepts a measured backward-inverted native rider/frame impact, keeping its peak-pitch/rear-support guards and all 190 checks. See the diagnosis for exact evidence and remaining stopping/terrain limitations.
+
+The final required workflow passed **5,474 assertions across 43 suites**, main-scene startup, Windows export and ZIP integrity/payload verification. The same 45-check A/B/A also passed against the exact compiled pack in the matching native editor engine with an explicit source-exclusion guard. Rendered smoke used the official Linux release template, visibly confirming the new receipt, exact 850 compression, unchanged Apply, helmet camera and clean exit without engine/script errors. The legacy repository checks also passed. Windows execution and physical Xbox feel remain unverified.
+
+```text
+v0.7.1 Windows ZIP (36,167,450 bytes)
+SHA-256 db32b671103d2be15692cd38aee231c349220eb0d5b5751e705d3ba70f5a8f7a
+v0.7.1 project pack (232,044 bytes)
+SHA-256 aa5425d34f624bd450a779b37305b36236a878bb34713709fcf298fe0fe40195
+```
+
+# Archived version 0.7 native validation
 
 Dirtline MX runs Godot 4.6.3/Jolt at 240 physics updates per second. The cloud executes the actual Linux engine, native contacts and compiled project pack. It can render through software OpenGL; it cannot execute Windows or poll a physically connected Xbox controller. Automated trajectories establish their stated riding recipes, rather than subjective riding quality or an exact match to MX Bikes/MX Simulator.
 

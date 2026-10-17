@@ -76,6 +76,11 @@ var physics_panel: PanelContainer
 var physics_label: Label
 var physics_record_indicator: Label
 var physics_recorder: RefCounted = TelemetryRecorder.new()
+var physics_runtime_receipt: Dictionary = {}
+var _physics_default_json_sha256 := ""
+var _physics_saved_handling_status := "absent"
+var _physics_saved_handling_error := ""
+var _physics_last_handling_save_status := "unchanged"
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
@@ -85,8 +90,11 @@ func _ready() -> void:
 		push_error("The 250F configuration could not be loaded.")
 		return
 	cfg = parsed as Dictionary
+	_physics_default_json_sha256 = FileAccess.get_sha256("res://config/bike_250f.json")
 	setup_values = (cfg.get("Suspension", {}) as Dictionary).duplicate(true)
 	var saved_handling := HandlingSetup.load_file("user://handling.cfg", cfg)
+	_physics_saved_handling_status = "loaded" if bool(saved_handling.get("loaded", false)) else ("absent" if bool(saved_handling.ok) else "rejected")
+	_physics_saved_handling_error = str(saved_handling.get("error", ""))
 	var runtime_config: Dictionary = saved_handling.config if bool(saved_handling.ok) else cfg
 	_build_world_environment()
 	track = TrackBuilder.build(self)
@@ -105,6 +113,7 @@ func _ready() -> void:
 	_build_hud()
 	_load_preferences()
 	_apply_preferences()
+	print("PHYSICS_RUNTIME ", JSON.stringify(get_runtime_receipt()))
 	_build_audio()
 	_show_modal("welcome")
 
@@ -703,6 +712,57 @@ func _toggle_physics_recording() -> void:
 			physics_recorder.stop()
 			_notice("Physics recording could not start: " + error_string(status), 6.0)
 
+func _runtime_handling_snapshot(config: Dictionary) -> Dictionary:
+	# Canonical supported handling plus actual suspension values. Normalize
+	# numeric types so restoring an integer default through a float SpinBox
+	# does not falsely report different physical settings.
+	var suspension: Dictionary = (config.get("Suspension", {}) as Dictionary).duplicate(true)
+	for axle: String in suspension:
+		for key: String in suspension[axle]:
+			if typeof(suspension[axle][key]) in [TYPE_INT, TYPE_FLOAT]:
+				suspension[axle][key] = float(suspension[axle][key])
+	return {"handling": HandlingSetup.snapshot(config), "suspension": suspension}
+
+func _runtime_input_path() -> String:
+	if not rider_input.controller_active:
+		return "keyboard"
+	var device := int(rider_input.controller_id)
+	var controller_name := Input.get_joy_name(device)
+	return "controller #%d%s" % [device, (" · " + controller_name) if not controller_name.is_empty() else ""]
+
+func _refresh_runtime_identity() -> void:
+	if bike == null or cfg.is_empty():
+		return
+	var baseline := _runtime_handling_snapshot(cfg)
+	var effective := _runtime_handling_snapshot(bike.config)
+	var default_hash := JSON.stringify(baseline).sha256_text()
+	var effective_hash := JSON.stringify(effective).sha256_text()
+	var shared_grip := HandlingSetup.value_at(bike.config, "Tire.GripScale", 1.0)
+	physics_runtime_receipt = {
+		"gameVersion": str(ProjectSettings.get_setting("application/config/version", "")),
+		"physicsControllerPath": str(bike.get_script().resource_path),
+		"physicsControllerNode": str(bike.get_path()),
+		"defaultJsonSha256": _physics_default_json_sha256,
+		"defaultSnapshotSha256": default_hash,
+		"effectiveSnapshotSha256": effective_hash,
+		"handlingMatchesDefaults": default_hash == effective_hash,
+		"ridingMode": str(bike.riding_mode),
+		"savedHandlingLoadStatus": _physics_saved_handling_status,
+		"savedHandlingLoadError": _physics_saved_handling_error,
+		"lastHandlingSaveStatus": _physics_last_handling_save_status,
+		"frontGripScale": HandlingSetup.value_at(bike.config, "Tire.Front.GripScale", shared_grip),
+		"rearGripScale": HandlingSetup.value_at(bike.config, "Tire.Rear.GripScale", shared_grip),
+		"intentResponseS": HandlingSetup.value_at(bike.config, "VirtualRider.IntentResponse", 0.07)
+	}
+
+func get_runtime_receipt() -> Dictionary:
+	var receipt := physics_runtime_receipt.duplicate(true)
+	# Device routing can change without changing any physics settings. Query
+	# its current path here; expensive snapshot hashing runs only on changes.
+	receipt["inputPath"] = _runtime_input_path()
+	receipt["selectedControllerId"] = int(rider_input.controller_id)
+	return receipt
+
 func _physics_text(t: Dictionary) -> String:
 	var supported := (bool(t.get("frontContact", false)) and float(t.get("frontLoad", 0.0)) > 1.0) \
 		or (bool(t.get("rearContact", false)) and float(t.get("rearLoad", 0.0)) > 1.0)
@@ -710,8 +770,13 @@ func _physics_text(t: Dictionary) -> String:
 	var landing := "Last landing: none recorded"
 	if crash_observation.has("impactSpeed"):
 		landing = "Last landing: %.1f impact / %.1f side m/s · %.1f°" % [float(crash_observation.get("impactSpeed", 0.0)), float(crash_observation.get("sideSpeed", 0.0)), rad_to_deg(float(crash_observation.get("landingTilt", 0.0)))]
+	var identity := get_runtime_receipt()
 	return "\n".join([
-		"PHYSICS TELEMETRY · F8 HIDE · F9 RECORD",
+		"PHYSICS v%s · F8 HIDE · F9 CSV" % str(identity.get("gameVersion", "")),
+		str(identity.get("physicsControllerPath", "")),
+		"%s · %s" % [str(identity.get("ridingMode", "")), str(identity.get("inputPath", ""))],
+		"%s #%s · startup %s" % ["DEFAULTS" if bool(identity.get("handlingMatchesDefaults", false)) else "CUSTOM", str(identity.get("effectiveSnapshotSha256", "")).left(8), str(identity.get("savedHandlingLoadStatus", ""))],
+		"Grip scale F/R %.2f / %.2f · input %.3f s" % [float(identity.get("frontGripScale", 1.0)), float(identity.get("rearGripScale", 1.0)), float(identity.get("intentResponseS", 0.07))],
 		"%.1f m/s · %s · %s" % [float(t.get("speedMps", 0.0)), "SUPPORTED" if supported else "AIRBORNE", str(t.get("ridingMode", ""))],
 		"Bank %+.1f° · pitch %+.1f° · steer %+.1f°" % [rad_to_deg(float(t.get("roll", 0.0))), rad_to_deg(float(t.get("pitch", 0.0))), rad_to_deg(float(t.get("steerAngle", 0.0)))],
 		"Local rates pitch / yaw / roll (rad/s)",
@@ -889,7 +954,8 @@ func _settings_content(content: VBoxContainer) -> void:
 		riding_mode = "virtual_rider" if index == 0 else "direct"
 		if bike.has_method("set_riding_mode"):
 			bike.set_riding_mode(riding_mode)
-		_save_preferences())
+		_save_preferences()
+		_refresh_runtime_identity())
 	content.add_child(mode_select)
 	var mode_info: Label = _label("Lean control: your rider countersteers and braces over bumps.\nMove your body independently to counterbalance the bike.\nFeet lift while riding and plant when you stop.", 14, MUTED)
 	content.add_child(mode_info)
@@ -961,7 +1027,7 @@ func _tuning_content(content: VBoxContainer) -> void:
 	grid.add_child(_label("REAR", 15, TEAL))
 	var definitions: Array = [
 		["SpringRate", "Spring · N/m", 8000.0, 40000.0, 500.0],
-		["Compression", "Compression · N·s/m", 300.0, 5000.0, 100.0],
+		["Compression", "Compression · N·s/m", 300.0, 5000.0, 50.0],
 		["Rebound", "Rebound · N·s/m", 300.0, 6000.0, 100.0],
 		["Preload", "Preload · m", 0.0, 0.035, 0.001]]
 	for definition: Array in definitions:
@@ -1063,6 +1129,8 @@ func _apply_handling() -> void:
 		handling_status.text = "Setup rejected. Use the supported ranges while parked upright."
 		return
 	var save_status := HandlingSetup.save_file("user://handling.cfg", changes)
+	_physics_last_handling_save_status = "saved" if save_status == OK else error_string(save_status)
+	_refresh_runtime_identity()
 	if session_started:
 		_resume()
 	else:
@@ -1085,6 +1153,7 @@ func _apply_tuning() -> void:
 	for end_name: String in ["Front", "Rear"]:
 		for property_name: String in changes[end_name]:
 			(setup_values[end_name] as Dictionary)[property_name] = changes[end_name][property_name]
+	_refresh_runtime_identity()
 	_resume()
 	_notice("Suspension setup applied to the test bike.", 4.0)
 
@@ -1127,6 +1196,7 @@ func _apply_preferences() -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen_enabled else DisplayServer.WINDOW_MODE_WINDOWED)
 	if engine_audio != null:
 		engine_audio.volume_db = -21.0 if audio_enabled else -80.0
+	_refresh_runtime_identity()
 
 func _build_audio() -> void:
 	if DisplayServer.get_name() == "headless":

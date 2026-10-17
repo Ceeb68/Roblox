@@ -237,6 +237,7 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 	var max_pitch := 0.0
 	var recovery_applied := false
 	var rear_only_after_landing := 0
+	var inverted_after_landing := false
 	var peak_height := 0.0
 	var max_front := 0.0
 	var max_rear := 0.0
@@ -281,6 +282,8 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 			supported_after_landing = true
 		if landed and float(state.rearLoad) > 1.0 and float(state.frontLoad) <= 1.0:
 			rear_only_after_landing += 1
+		if landed and bike.chassis.global_basis.y.dot(Vector3.UP) < 0.0:
+			inverted_after_landing = true
 		if i % 24 == 0:
 			samples.append({"time": time, "position": str(position), "x": position.x, "z": position.z,
 				"velocity": str(bike.chassis.linear_velocity), "heading": str(-bike.chassis.global_basis.z),
@@ -294,13 +297,25 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 		if bike.crashed or position.z > finish + 15.0:
 			break
 	var final_position: Vector3 = bike.chassis.global_position
+	var final_up: float = bike.chassis.global_basis.y.dot(Vector3.UP)
+	var final_forward_along_approach: float = (-bike.chassis.global_basis.z).dot(Vector3.BACK)
+	var frame_contacts: int = bike.chassis.get_contact_count()
+	var rider_contacts: int = bike.rider_body.get_contact_count()
 	_check(flew and float(longest_air) / HZ > 0.8 and peak_height > height + 0.7,
 		title + " launches through actual contact into measurable flight",
 		"air=%.3f s peak chassis=%.3f m" % [float(longest_air) / HZ, peak_height])
 	if deliberate_powered_wheelie:
-		_check(landed and bike.crashed and bike.crash_reason == "Wheelie loop-out",
-			title + " produces a physically justified powered loop-out",
-			"position=%s reason=%s" % [final_position, bike.crash_reason])
+		# The threshold can be crossed while the rear tire is still loaded, or
+		# just after it unloads. In the latter case native flight continues until
+		# the inverted frame/rider actually hits the soil. Both are real powered
+		# overturns; an unrelated ordinary low-side must not satisfy this guard.
+		var inverted_body_impact: bool = inverted_after_landing and final_up < 0.0 and final_forward_along_approach < 0.0 \
+			and frame_contacts + rider_contacts > 0 \
+			and bike.crash_reason in ["Loss of balance / low-side", "Over-rotation"]
+		_check(landed and bike.crashed and (bike.crash_reason == "Wheelie loop-out" or inverted_body_impact),
+			title + " produces a physically justified powered overturn",
+			"position=%s reason=%s up=%.3f forward=%.3f native body contacts=%d" %
+			[final_position, bike.crash_reason, final_up, final_forward_along_approach, frame_contacts + rider_contacts])
 		_check(max_pitch > deg_to_rad(70.0) and rear_only_after_landing > roundi(0.20 * HZ),
 			title + " actually lifts the front and over-rotates after sustained rear-only support",
 			"pitch=%.2f degrees rear-only=%.3f s" % [rad_to_deg(max_pitch), float(rear_only_after_landing) / HZ])
@@ -329,6 +344,10 @@ func _powered_jump(recipe: Dictionary, speed: float, body_forward: float, cfg: D
 		"expectation": "powered-loop-out" if deliberate_powered_wheelie else "landing-runout",
 		"touchdownThrottleRecovery": recovery_applied, "peakPitchDeg": rad_to_deg(max_pitch),
 		"rearOnlyAfterLandingSeconds": float(rear_only_after_landing) / HZ,
+		"invertedAfterLanding": inverted_after_landing, "finalUpDotWorld": final_up,
+		"finalForwardAlongApproach": final_forward_along_approach,
+		"frameContactsAtFinish": frame_contacts, "riderContactsAtFinish": rider_contacts,
+		"crashObservation": bike.get_telemetry().get("crashObservation", {}),
 		"longestAir": float(longest_air) / HZ, "peakHeight": peak_height,
 		"maxBank": rad_to_deg(max_bank), "maxLaneError": max_lane_error,
 		"minCorridorClearance": min_corridor_clearance, "maxFrontTravel": max_front,

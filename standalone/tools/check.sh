@@ -18,6 +18,8 @@ run_check --headless --fixed-fps 240 --script res://tests/gyro_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/rider_dynamics_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/native_scenarios.gd
 run_check --headless --fixed-fps 240 --script res://tests/contact_load_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/ground_lifecycle_tests.gd -- --hz=240
+run_check --headless --fixed-fps 480 --script res://tests/ground_lifecycle_tests.gd -- --hz=480
 run_check --headless --fixed-fps 240 --script res://tests/tire_patch_phase_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/terrain_contact_tests.gd
 run_check --headless --fixed-fps 480 --script res://tests/terrain_contact_tests.gd -- --hz=480
@@ -38,6 +40,8 @@ run_check --headless --fixed-fps 240 --script res://tests/handling_overhaul_test
 run_check --headless --script res://tests/rider_sensor_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/input_camera_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/handling_setup_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/runtime_identity_tests.gd
+run_check --headless --fixed-fps 240 --script res://tests/runtime_handling_path_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/telemetry_recorder_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/rider_animation_tests.gd
 run_check --headless --fixed-fps 240 --script res://tests/automated_feet_tests.gd

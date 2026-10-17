@@ -1,7 +1,9 @@
-DIRTLINE MX / WINDOWS PC / 0.7.0
+DIRTLINE MX / WINDOWS PC / 0.7.1
 
 Extract the entire ZIP, then double-click DirtlineMX.exe.
 Keep DirtlineMX.pck in the same folder as the executable.
+Extract into a new folder when updating. The EXE is the engine runtime;
+the matching PCK contains the changed game. Replacing only the EXE is not an update.
 No Roblox account, Roblox Studio or Godot editor is needed to play.
 
 STARTING THE BIKE
@@ -94,6 +96,12 @@ Standing, support feet and cornering legs blend from their current positions.
 
 PHYSICS TELEMETRY
 F8 toggles speed, lean, steering, wheel loads/slip, suspension and crash data.
+It also identifies the loaded version, riding mode, active input path,
+DEFAULTS/CUSTOM handling fingerprint, front/rear grip scales and input response.
+For a clean comparison, select Lean control / virtual rider in Settings, then
+Handling setup -> Restore tested defaults -> Apply and ride. F8 should show
+v0.7.1, virtual_rider, DEFAULTS, grip scales 1.00 / 1.00 and input 0.070 s.
+Restoring handling does not change a separately saved manual riding mode.
 F9 starts/stops a physics CSV recording. The saved path appears on screen.
 Recordings stay on this computer; menus and paused time are not recorded.
 
